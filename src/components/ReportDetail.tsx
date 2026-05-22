@@ -3991,8 +3991,9 @@ export default function ReportDetail({ reportId, onBack, isPublic = false }: Rep
         u.searchParams.set('report', reportId);
         return u.toString();
       })();
+      const publicReportUrl = `https://app.perciq.co/report/${reportId}`;
       const addrSlug = (reportData.address ?? 'report').replace(/[^a-z0-9]+/gi, '-').toLowerCase().slice(0, 40);
-      const html = generateReportHTML(reportData, { shareUrl, filename: `PercIQ-${addrSlug}.pdf` });
+      const html = generateReportHTML(reportData, { shareUrl, publicReportUrl, filename: `PercIQ-${addrSlug}.pdf` });
       const blob = new Blob([html], { type: 'text/html;charset=utf-8' });
       const url = URL.createObjectURL(blob);
       window.open(url, '_blank');

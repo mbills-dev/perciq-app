@@ -822,7 +822,7 @@ body{
 
 // ── Main HTML generator ───────────────────────────────────────────────────────
 
-export function generateReportHTML(data: ReportData, meta?: { shareUrl?: string; filename?: string }): string {
+export function generateReportHTML(data: ReportData, meta?: { shareUrl?: string; publicReportUrl?: string; filename?: string }): string {
   const circumference = 251.3;
 
   const bestColor = scoreColor(data.bestZoneScore);
@@ -851,6 +851,7 @@ export function generateReportHTML(data: ReportData, meta?: { shareUrl?: string;
   const bestSubLabel = data.bestZoneScore >= 65 ? 'Viable' : data.bestZoneScore >= 35 ? 'Engineering Needed' : 'Not Suitable';
 
   const shareUrl = meta?.shareUrl ?? '';
+  const publicReportUrl = meta?.publicReportUrl ?? shareUrl;
   const filename = meta?.filename ?? 'PercIQ-report.pdf';
 
   return `<!DOCTYPE html>
@@ -1088,14 +1089,14 @@ export function generateReportHTML(data: ReportData, meta?: { shareUrl?: string;
 <div class="dl-bar">
   <div class="dl-info"><strong>${data.address}</strong> &nbsp;&middot;&nbsp; PercIQ Soil Suitability Report &nbsp;&middot;&nbsp; ${data.generatedDate}</div>
   <div class="dl-actions">
-    ${shareUrl ? '<button class="dl-btn dl-btn-ghost" id="share-btn"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg> Share</button>' : ''}
+    ${publicReportUrl ? '<button class="dl-btn dl-btn-ghost" id="share-btn"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg> Share</button>' : ''}
     <button class="dl-btn dl-btn-primary" id="dl-btn"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg> <span id="dl-label">Save as PDF</span></button>
   </div>
 </div>
 
 <script>
 (function() {
-  var shareUrl = ${JSON.stringify(shareUrl)};
+  var shareUrl = ${JSON.stringify(publicReportUrl)};
   var filename = ${JSON.stringify(filename)};
 
   var shareBtn = document.getElementById('share-btn');

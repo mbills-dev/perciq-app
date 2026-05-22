@@ -6,7 +6,13 @@ import Layout from './components/Layout';
 import Dashboard from './components/Dashboard';
 import ReportDetail from './components/ReportDetail';
 import SettingsPage from './components/SettingsPage';
+import PublicReportPage from './components/PublicReportPage';
 import { Layers } from 'lucide-react';
+
+function getPublicReportId(): string | null {
+  const match = window.location.pathname.match(/^\/report\/([a-f0-9-]{36})$/i);
+  return match ? match[1] : null;
+}
 
 type Page = 'dashboard' | 'settings';
 
@@ -25,7 +31,7 @@ function setReportIdInUrl(reportId: string | null) {
   window.history.replaceState(null, '', url.toString());
 }
 
-export default function App() {
+function AuthenticatedApp() {
   const [user, setUser] = useState<User | null>(null);
   const [authLoading, setAuthLoading] = useState(true);
   const [currentPage, setCurrentPage] = useState<Page>('dashboard');
@@ -171,4 +177,12 @@ export default function App() {
       )}
     </Layout>
   );
+}
+
+export default function App() {
+  const publicReportId = getPublicReportId();
+  if (publicReportId) {
+    return <PublicReportPage reportId={publicReportId} />;
+  }
+  return <AuthenticatedApp />;
 }
