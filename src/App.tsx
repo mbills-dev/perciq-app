@@ -1,0 +1,130 @@
+import { useEffect, useState } from 'react';
+import { supabase } from './lib/supabase';
+import type { User } from '@supabase/supabase-js';
+import AuthPage from './components/AuthPage';
+import Layout from './components/Layout';
+import Dashboard from './components/Dashboard';
+import ReportDetail from './components/ReportDetail';
+import SettingsPage from './components/SettingsPage';
+
+type Page = 'dashboard' | 'settings';
+
+function getReportIdFromUrl(): string | null {
+  const params = new URLSearchParams(window.location.search);
+  return params.get('report');
+}
+
+function setReportIdInUrl(reportId: string | null) {
+  const url = new URL(window.location.href);
+  if (reportId) {
+    url.searchParams.set('report', reportId);
+  } else {
+    url.searchParams.delete('report');
+  }
+  window.history.replaceState(null, '', url.toString());
+}
+
+export default function App() {
+  const [user, setUser] = useState<User | null>(null);
+  const [authLoading, setAuthLoading] = useState(true);
+  const [currentPage, setCurrentPage] = useState<Page>('dashboard');
+  const [viewingReportId, setViewingReportId] = useState<string | null>(getReportIdFromUrl);
+
+  useEffect(() => {
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      setUser(session?.user ?? null);
+      setAuthLoading(false);
+    });
+
+    supabase.auth.onAuthStateChange((_event, session) => {
+      setUser(session?.user ?? null);
+    });
+  }, []);
+
+  function handleNavigate(page: Page) {
+    setCurrentPage(page);
+    setViewingReportId(null);
+    setReportIdInUrl(null);
+  }
+
+  function handleViewReport(reportId: string) {
+    setViewingReportId(reportId);
+    setReportIdInUrl(reportId);
+  }
+
+  async function handleCreateReport(parcelId: string) {
+    const { data: { user: currentUser } } = await supabase.auth.getUser();
+    if (!currentUser) return;
+
+    const { data: existingReport } = await supabase
+      .from('reports')
+      .select('id')
+      .eq('parcel_id', parcelId)
+      .eq('user_id', currentUser.id)
+      .maybeSingle();
+
+    if (existingReport) {
+      handleViewReport(existingReport.id);
+      return;
+    }
+
+    const { data: report } = await supabase
+      .from('reports')
+      .insert({ user_id: currentUser.id, parcel_id: parcelId, status: 'pending' })
+      .select()
+      .single();
+
+    if (report) {
+      handleViewReport(report.id);
+    }
+  }
+
+  if (authLoading) {
+    return (
+      <div className="min-h-screen bg-navy-900 flex items-center justify-center">
+        <div className="flex flex-col items-center gap-4">
+          <div className="w-8 h-8 border-2 border-white/10 border-t-primary-400 rounded-full animate-spin" />
+          <p className="text-white/30 text-sm">Loading PercIQ...</p>
+        </div>
+      </div>
+    );
+  }
+
+  if (!user) {
+    return <AuthPage />;
+  }
+
+  if (viewingReportId) {
+    return (
+      <Layout
+        currentPage={currentPage}
+        onNavigate={handleNavigate}
+        userEmail={user.email ?? ''}
+        fullHeight
+      >
+        <ReportDetail
+          reportId={viewingReportId}
+          onBack={() => { setViewingReportId(null); setReportIdInUrl(null); }}
+        />
+      </Layout>
+    );
+  }
+
+  return (
+    <Layout
+      currentPage={currentPage}
+      onNavigate={handleNavigate}
+      userEmail={user.email ?? ''}
+    >
+      {currentPage === 'dashboard' && (
+        <Dashboard
+          onViewReport={handleViewReport}
+          onCreateReport={handleCreateReport}
+        />
+      )}
+      {currentPage === 'settings' && (
+        <SettingsPage user={user} />
+      )}
+    </Layout>
+  );
+}

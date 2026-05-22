@@ -1,0 +1,78 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  body {
+    @apply bg-navy-900 text-white font-sans antialiased;
+  }
+
+  * {
+    @apply border-white/10;
+  }
+
+  ::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+  }
+
+  ::-webkit-scrollbar-track {
+    @apply bg-navy-800;
+  }
+
+  ::-webkit-scrollbar-thumb {
+    @apply bg-white/20 rounded-full;
+  }
+
+  ::-webkit-scrollbar-thumb:hover {
+    @apply bg-white/30;
+  }
+}
+
+@layer components {
+  .card {
+    @apply bg-navy-800 border border-white/10 rounded-xl;
+  }
+
+  .btn-primary {
+    @apply bg-primary-500 hover:bg-primary-600 text-white font-medium px-4 py-2 rounded-lg transition-colors duration-200 disabled:opacity-50 disabled:cursor-not-allowed;
+  }
+
+  .btn-ghost {
+    @apply bg-white/5 hover:bg-white/10 text-white font-medium px-4 py-2 rounded-lg transition-colors duration-200;
+  }
+
+  .input {
+    @apply bg-navy-700 border border-white/10 rounded-lg px-3 py-2 text-white placeholder-white/30 focus:outline-none focus:ring-2 focus:ring-primary-500/50 focus:border-primary-500/50 transition-all duration-200 w-full;
+  }
+
+  .score-pass {
+    @apply text-primary-500;
+  }
+
+  .score-marginal {
+    @apply text-amber-500;
+  }
+
+  .score-fail {
+    @apply text-danger-500;
+  }
+
+  .badge-pass {
+    @apply bg-primary-500/15 text-primary-400 border border-primary-500/30;
+  }
+
+  .badge-marginal {
+    @apply bg-amber-500/15 text-amber-400 border border-amber-500/30;
+  }
+
+  .badge-fail {
+    @apply bg-danger-500/15 text-danger-400 border border-danger-500/30;
+  }
+
+  .badge-pending {
+    @apply bg-white/10 text-white/60 border border-white/20;
+  }
+}
