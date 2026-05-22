@@ -14,6 +14,7 @@ import type { PercPinData } from '../utils/generateReport';
 interface ReportDetailProps {
   reportId: string;
   onBack: () => void;
+  isPublic?: boolean;
 }
 
 interface ScoreResult {
@@ -3381,7 +3382,7 @@ function CollapsibleSection({
 
 // ─── Main component ──────────────────────────────────────────────────────────
 
-export default function ReportDetail({ reportId, onBack }: ReportDetailProps) {
+export default function ReportDetail({ reportId, onBack, isPublic = false }: ReportDetailProps) {
   const [report, setReport] = useState<Report | null>(null);
   const [soilResults, setSoilResults] = useState<SoilResult[]>([]);
   const [countyRule, setCountyRule] = useState<CountyRule | null>(null);
@@ -4190,9 +4191,11 @@ export default function ReportDetail({ reportId, onBack }: ReportDetailProps) {
       {/* Header */}
       <div className="px-5 pt-5 pb-4 border-b border-white/5">
         <div className="flex items-start gap-3">
-          <button onClick={onBack} className="mt-0.5 text-white/30 hover:text-white transition-colors flex-shrink-0">
-            <ArrowLeft className="w-4 h-4" />
-          </button>
+          {!isPublic && (
+            <button onClick={onBack} className="mt-0.5 text-white/30 hover:text-white transition-colors flex-shrink-0">
+              <ArrowLeft className="w-4 h-4" />
+            </button>
+          )}
           <div className="min-w-0 flex-1">
             <h2 className="text-sm font-semibold leading-snug truncate text-white" style={{ letterSpacing: '-0.2px' }}>
               {(() => {
@@ -4228,7 +4231,7 @@ export default function ReportDetail({ reportId, onBack }: ReportDetailProps) {
             <h3 className="font-semibold mb-1">Analysis Failed</h3>
             <p className="text-white/40 text-sm max-w-xs">{pipeline.error}</p>
           </div>
-          <button onClick={handleReanalyse} className="btn-primary text-sm">Try Again</button>
+          {!isPublic && <button onClick={handleReanalyse} className="btn-primary text-sm">Try Again</button>}
         </div>
       )}
 
@@ -4279,22 +4282,24 @@ export default function ReportDetail({ reportId, onBack }: ReportDetailProps) {
               <AlertCircle className="w-3 h-3 flex-shrink-0" style={{ color: '#FF9F0A' }} />
               <span style={{ fontSize: 10, color: 'rgba(255,255,255,0.38)', letterSpacing: '0.3px' }}>No local history</span>
             </div>
-            <div className="ml-auto">
-              <button
-                onClick={handleReanalyse}
-                disabled={reanalysing}
-                className="flex items-center gap-1 transition-colors hover:opacity-80"
-                style={{ color: 'rgba(255,255,255,0.45)', fontSize: 10 }}
-                title="Re-run full analysis"
-              >
-                <RefreshCw className={`w-3 h-3 ${reanalysing ? 'animate-spin' : ''}`} />
-                <span>Re-run</span>
-              </button>
-            </div>
+            {!isPublic && (
+              <div className="ml-auto">
+                <button
+                  onClick={handleReanalyse}
+                  disabled={reanalysing}
+                  className="flex items-center gap-1 transition-colors hover:opacity-80"
+                  style={{ color: 'rgba(255,255,255,0.45)', fontSize: 10 }}
+                  title="Re-run full analysis"
+                >
+                  <RefreshCw className={`w-3 h-3 ${reanalysing ? 'animate-spin' : ''}`} />
+                  <span>Re-run</span>
+                </button>
+              </div>
+            )}
           </div>
 
           {/* Download + Share buttons */}
-          {mapLayersReady && mapSoilPolygons.length > 0 && (
+          {!isPublic && mapLayersReady && mapSoilPolygons.length > 0 && (
             <div style={{ display: 'flex', gap: 6 }}>
               <button
                 onClick={handleDownloadReport}
@@ -4616,6 +4621,53 @@ export default function ReportDetail({ reportId, onBack }: ReportDetailProps) {
             </div>
           </div>
 
+        </div>
+      )}
+
+      {/* Public CTA banner */}
+      {isPublic && (
+        <div style={{
+          margin: '0 20px 20px',
+          padding: '14px 16px',
+          borderRadius: 12,
+          background: 'linear-gradient(135deg, rgba(34,197,94,0.10) 0%, rgba(34,197,94,0.05) 100%)',
+          border: '1px solid rgba(34,197,94,0.25)',
+          display: 'flex',
+          flexDirection: 'column',
+          gap: 10,
+        }}>
+          <div>
+            <p style={{ fontSize: 12, fontWeight: 700, color: '#22C55E', letterSpacing: '-0.1px', marginBottom: 3 }}>
+              Run your own parcel analysis
+            </p>
+            <p style={{ fontSize: 11, color: 'rgba(255,255,255,0.55)', lineHeight: 1.5 }}>
+              PercIQ screens any parcel for septic suitability using USDA soil data, FEMA flood zones, and wetland boundaries — in minutes.
+            </p>
+          </div>
+          <a
+            href="https://app.perciq.co"
+            target="_blank"
+            rel="noopener noreferrer"
+            style={{
+              display: 'inline-flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              gap: 6,
+              padding: '8px 14px',
+              borderRadius: 8,
+              background: '#22C55E',
+              color: '#fff',
+              fontSize: 12,
+              fontWeight: 700,
+              textDecoration: 'none',
+              letterSpacing: '0.02em',
+              transition: 'opacity 150ms',
+            }}
+            onMouseEnter={e => (e.currentTarget.style.opacity = '0.85')}
+            onMouseLeave={e => (e.currentTarget.style.opacity = '1')}
+          >
+            Get your free analysis at perciq.co
+          </a>
         </div>
       )}
     </div>

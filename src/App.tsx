@@ -6,6 +6,7 @@ import Layout from './components/Layout';
 import Dashboard from './components/Dashboard';
 import ReportDetail from './components/ReportDetail';
 import SettingsPage from './components/SettingsPage';
+import { Layers } from 'lucide-react';
 
 type Page = 'dashboard' | 'settings';
 
@@ -86,6 +87,49 @@ export default function App() {
           <div className="w-8 h-8 border-2 border-white/10 border-t-primary-400 rounded-full animate-spin" />
           <p className="text-white/30 text-sm">Loading PercIQ...</p>
         </div>
+      </div>
+    );
+  }
+
+  // Unauthenticated user visiting a shared report link — public read-only view
+  if (!user && viewingReportId) {
+    return (
+      <div className="min-h-screen bg-navy-900 flex flex-col" style={{ height: '100vh' }}>
+        {/* Minimal public header */}
+        <header className="h-14 bg-navy-800/60 border-b border-white/5 flex items-center px-5 gap-4 sticky top-0 z-10 backdrop-blur-sm flex-shrink-0">
+          <a
+            href="https://app.perciq.co"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="flex items-center gap-2.5 hover:opacity-80 transition-opacity"
+          >
+            <div className="w-7 h-7 bg-primary-500/20 border border-primary-500/40 rounded-lg flex items-center justify-center">
+              <Layers className="w-3.5 h-3.5 text-primary-400" />
+            </div>
+            <span className="font-bold text-sm tracking-tight text-white">PercIQ</span>
+          </a>
+          <div className="flex-1" />
+          <a
+            href="https://app.perciq.co"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="hidden sm:flex items-center gap-2 px-4 py-2 rounded-lg text-xs font-semibold transition-all"
+            style={{
+              background: 'rgba(34,197,94,0.12)',
+              border: '1px solid rgba(34,197,94,0.30)',
+              color: '#22C55E',
+            }}
+          >
+            Get your free analysis
+          </a>
+        </header>
+        <main className="flex-1 overflow-hidden">
+          <ReportDetail
+            reportId={viewingReportId}
+            onBack={() => {}}
+            isPublic
+          />
+        </main>
       </div>
     );
   }
