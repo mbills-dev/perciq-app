@@ -6,7 +6,7 @@ import type { Report, SoilResult, CountyRule } from '../types/database';
 import {
   ArrowLeft, CheckCircle, XCircle, AlertTriangle,
   RefreshCw, AlertCircle,
-  ChevronDown, ChevronUp, Circle, Download, Link2, Check, ExternalLink,
+  ChevronDown, ChevronUp, Circle, Download, Link2, Check, ExternalLink, Compass,
 } from 'lucide-react';
 import { generateReportHTML, buildSeriesSummary } from '../utils/generateReport';
 import type { PercPinData } from '../utils/generateReport';
@@ -3256,6 +3256,45 @@ function MapPanel({ parcelBoundary, isBboxFallback, boundarySource, soilResults,
             </p>
           </div>
         )
+      )}
+
+      {/* Reset view button — bottom-right, above 3D button */}
+      {overlayGone && (
+        <button
+          onClick={() => {
+            const map = mapRef.current;
+            const cam = initialCameraRef.current;
+            if (!map) return;
+            map.easeTo({
+              bearing: 0,
+              pitch: 0,
+              zoom: cam?.zoom ?? map.getZoom(),
+              center: cam?.center ?? map.getCenter(),
+              duration: 1000,
+              easing: (t) => t < 0.5 ? 2 * t * t : -1 + (4 - 2 * t) * t,
+            });
+          }}
+          title="Reset view"
+          style={{
+            position: 'absolute',
+            bottom: 130,
+            right: 10,
+            width: 29,
+            height: 29,
+            borderRadius: 4,
+            border: 'none',
+            cursor: 'pointer',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            background: 'rgba(15,20,30,0.92)',
+            color: 'rgba(255,255,255,0.85)',
+            boxShadow: '0 1px 4px rgba(0,0,0,0.45)',
+            zIndex: 5,
+          }}
+        >
+          <Compass size={15} strokeWidth={2} />
+        </button>
       )}
 
       {/* 3D terrain toggle — bottom-right, above zoom controls */}
