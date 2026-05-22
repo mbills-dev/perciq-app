@@ -5,7 +5,7 @@ import { generateReportHTML, buildSeriesSummary } from '../utils/generateReport'
 import type { ReportData, ZoneData, SeriesData } from '../utils/generateReport';
 import { Layers, ExternalLink, Download } from 'lucide-react';
 
-// ── Score helpers (mirrors the map-panel polygon scoring logic) ───────────────
+// ── Fallback score helpers (used only when report_data is not yet cached) ─────
 
 function drainageScore(drainage: string | null): number {
   if (!drainage) return 50;
@@ -56,19 +56,17 @@ function scoreToBucket(score: number): 'viable' | 'engineering-needed' | 'not-su
   return 'not-suitable';
 }
 
-// ── Build ReportData from DB rows ─────────────────────────────────────────────
+// ── Fallback builder — used only when report_data has not been cached yet ─────
 
-function buildReportData(report: Report, soilResults: SoilResult[]): ReportData {
+function buildFallbackReportData(report: Report, soilResults: SoilResult[]): ReportData {
   const parcel = report.parcels;
 
-  // Score each soil result
   const scored = soilResults.map(sr => ({
     sr,
     score: computeSoilScore(sr),
     bucket: scoreToBucket(computeSoilScore(sr)),
   }));
 
-  // Build fake GeoJSON polygons for buildSeriesSummary (no geometry = 0 acres)
   const fakePolygons = scored.map(({ sr, score, bucket }) => ({
     mukey: sr.map_unit_key ?? sr.id,
     geojson: {
@@ -96,7 +94,6 @@ function buildReportData(report: Report, soilResults: SoilResult[]): ReportData 
     totalAcres: 0,
   }));
 
-  // Top zones (best 3 unique series)
   const topZones: ZoneData[] = soilSeries
     .filter(s => s.bestScore >= 35)
     .slice(0, 3)
@@ -121,7 +118,6 @@ function buildReportData(report: Report, soilResults: SoilResult[]): ReportData 
 
   const bestZoneScore = report.best_zone_score ?? (scored[0]?.score ?? 0);
   const parcelScore = report.parcel_score ?? bestZoneScore;
-
   const floodPct = (report.fema_feature_count ?? 0) > 0 ? 5 : 0;
   const wetlandPct = (report.nwi_feature_count ?? 0) > 0 ? 3 : 0;
 
@@ -177,7 +173,6 @@ export default function PublicReportPage({ reportId }: PublicReportPageProps) {
   const [reportHtml, setReportHtml] = useState('');
   const [reportStyles, setReportStyles] = useState('');
   const [address, setAddress] = useState('');
-  const [pdfUrl, setPdfUrl] = useState<string | null>(null);
   const [pdfLoading, setPdfLoading] = useState(false);
   const [isLoggedIn, setIsLoggedIn] = useState<boolean | null>(null);
 
@@ -189,14 +184,34 @@ export default function PublicReportPage({ reportId }: PublicReportPageProps) {
 
   useEffect(() => {
     async function load() {
-      const [{ data: rep }, { data: soil }] = await Promise.all([
-        supabase.from('reports').select('*, parcels(*)').eq('id', reportId).maybeSingle(),
-        supabase.from('soil_results').select('*').eq('report_id', reportId).order('pct_coverage', { ascending: false }),
-      ]);
+      const { data: rep } = await supabase
+        .from('reports')
+        .select('*, parcels(*)')
+        .eq('id', reportId)
+        .maybeSingle();
 
       if (!rep) { setNotFound(true); setLoading(false); return; }
 
-      const reportData = buildReportData(rep as Report, (soil as SoilResult[]) ?? []);
+      const report = rep as Report & { report_data?: ReportData | null };
+
+      let reportData: ReportData;
+
+      if (report.report_data) {
+        // Use the exact ReportData saved when the authenticated user generated the PDF.
+        reportData = {
+          ...report.report_data,
+          mapImageBase64: null,
+        };
+      } else {
+        // report_data not yet written — fall back to reconstructing from stored DB fields.
+        const { data: soil } = await supabase
+          .from('soil_results')
+          .select('*')
+          .eq('report_id', reportId)
+          .order('pct_coverage', { ascending: false });
+        reportData = buildFallbackReportData(report, (soil as SoilResult[]) ?? []);
+      }
+
       setAddress(reportData.address);
 
       const publicReportUrl = `https://app.perciq.co/report/${reportId}`;
@@ -207,7 +222,6 @@ export default function PublicReportPage({ reportId }: PublicReportPageProps) {
       });
 
       setReportStyles(extractHeadStyles(html));
-      // Strip the dl-bar (floating toolbar) from the inline view — we have our own footer
       const body = extractBodyContent(html).replace(/<div class="dl-bar">[\s\S]*?<\/div>\s*(?=<script)/i, '');
       setReportHtml(body);
       setLoading(false);
@@ -222,7 +236,6 @@ export default function PublicReportPage({ reportId }: PublicReportPageProps) {
       return;
     }
     setPdfLoading(true);
-    // Open the interactive report for the authenticated user
     window.open(`https://app.perciq.co/?report=${reportId}`, '_blank');
     setPdfLoading(false);
   }
@@ -254,10 +267,8 @@ export default function PublicReportPage({ reportId }: PublicReportPageProps) {
 
   return (
     <div className="min-h-screen bg-[#c8cfd8]" style={{ paddingBottom: '80px' }}>
-      {/* Inject report styles into the page */}
       <style dangerouslySetInnerHTML={{ __html: reportStyles }} />
 
-      {/* Minimal public header */}
       <div
         style={{
           position: 'sticky', top: 0, zIndex: 100,
@@ -310,13 +321,11 @@ export default function PublicReportPage({ reportId }: PublicReportPageProps) {
         </button>
       </div>
 
-      {/* Report pages rendered inline */}
       <div
         dangerouslySetInnerHTML={{ __html: reportHtml }}
         style={{ fontFamily: "'Inter', -apple-system, BlinkMacSystemFont, system-ui, sans-serif" }}
       />
 
-      {/* Sticky CTA footer */}
       <div style={{
         position: 'fixed', bottom: 0, left: 0, right: 0, zIndex: 200,
         background: 'rgba(10,15,30,0.96)',

@@ -60,6 +60,7 @@ export interface Report {
   status: 'pending' | 'processing' | 'complete' | 'failed';
   fema_feature_count: number | null;
   nwi_feature_count: number | null;
+  report_data: Record<string, unknown> | null;
   created_at: string;
   parcels?: Parcel;
   soil_results?: SoilResult[];

@@ -3998,6 +3998,12 @@ export default function ReportDetail({ reportId, onBack, isPublic = false }: Rep
       const url = URL.createObjectURL(blob);
       window.open(url, '_blank');
       setTimeout(() => URL.revokeObjectURL(url), 15000);
+
+      // Persist the fully-computed ReportData so public/shared pages render identically.
+      const { mapImageBase64: _img, ...reportDataWithoutImage } = reportData;
+      supabase.from('reports').update({ report_data: reportDataWithoutImage }).eq('id', reportId).then(({ error }) => {
+        if (error) console.warn('[report] failed to cache report_data:', error.message);
+      });
     } catch (err) {
       console.error('[report] generation failed', err);
     } finally {
