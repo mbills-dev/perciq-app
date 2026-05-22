@@ -1122,111 +1122,55 @@ export function generateReportHTML(data: ReportData, meta?: { shareUrl?: string;
       Promise.all([
         loadScript('https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js'),
         loadScript('https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js')
-      ]).then(function() {
+      ]).then(async function() {
         var pdfW = 816, pdfH = 1056;
-        var TALL_THRESHOLD = 1200;
-        var SNAP_MARGIN = 80;
-        var scale = 2;
         var jsPDFLib = window.jspdf || window.jsPDF;
-        var pgEls = Array.from(document.querySelectorAll('.pg'));
-        var isFirst = true;
+        var pdf = new jsPDFLib.jsPDF({ unit: 'px', format: [pdfW, pdfH], orientation: 'portrait' });
+        var isFirstPage = true;
+        var pages = Array.from(document.querySelectorAll('.pg'));
 
-        // Build sorted list of card boundary Y offsets (relative to pg top) for a tall pg.
-        function getCardBoundaries(pg) {
-          var pgTop = pg.getBoundingClientRect().top;
-          var cards = Array.from(pg.querySelectorAll('.zone-card, .soil-row, .series-row'));
-          var boundaries = [0];
-          cards.forEach(function(card) {
-            var r = card.getBoundingClientRect();
-            boundaries.push(Math.round(r.top - pgTop));
-            boundaries.push(Math.round(r.bottom - pgTop));
+        for (var pi = 0; pi < pages.length; pi++) {
+          var page = pages[pi];
+          var rawH = page.getBoundingClientRect().height;
+          var remainder = rawH % pdfH;
+          var paddedH = remainder > 0 ? rawH + (pdfH - remainder) : rawH;
+          page.style.paddingBottom = (paddedH - rawH) + 'px';
+
+          var canvas = await html2canvas(page, {
+            scale: 2,
+            width: pdfW,
+            height: paddedH,
+            useCORS: true,
+            allowTaint: true,
+            backgroundColor: '#ffffff'
           });
-          return boundaries.sort(function(a, b) { return a - b; });
-        }
 
-        // Snap a cut point to the nearest card boundary if within SNAP_MARGIN px.
-        function snapCut(cut, boundaries) {
-          var best = cut, bestDist = SNAP_MARGIN + 1;
-          for (var i = 0; i < boundaries.length; i++) {
-            var d = Math.abs(boundaries[i] - cut);
-            if (d < bestDist) { bestDist = d; best = boundaries[i]; }
-          }
-          return best;
-        }
-
-        var pdf = null;
-        var chain = Promise.resolve();
-
-        pgEls.forEach(function(pg) {
-          chain = chain.then(function() {
-            var pgH = Math.round(pg.getBoundingClientRect().height) || pdfH;
-
-            if (pgH <= TALL_THRESHOLD) {
-              // Short section: single PDF page sized to content height.
-              return html2canvas(pg, {
-                scale: scale, useCORS: true, allowTaint: true,
-                backgroundColor: '#ffffff',
-                width: pdfW, height: pgH,
-                windowWidth: pdfW, windowHeight: pgH,
-              }).then(function(canvas) {
-                var pageHeightPt = pgH;
-                if (pdf === null) {
-                  pdf = new jsPDFLib.jsPDF({ unit: 'px', format: [pdfW, pageHeightPt], compress: true });
-                } else {
-                  pdf.addPage([pdfW, pageHeightPt], 'portrait');
-                }
-                isFirst = false;
-                pdf.addImage(canvas.toDataURL('image/jpeg', 0.92), 'JPEG', 0, 0, pdfW, pageHeightPt, undefined, 'FAST');
-              });
-            } else {
-              // Tall section: smart-sliced into pdfH strips with card-boundary snapping.
-              var boundaries = getCardBoundaries(pg);
-              return html2canvas(pg, {
-                scale: scale, useCORS: true, allowTaint: true,
-                backgroundColor: '#ffffff',
-                width: pdfW, height: pgH,
-                windowWidth: pdfW, windowHeight: pgH,
-              }).then(function(canvas) {
-                var pos = 0;
-                while (pos < pgH) {
-                  var idealCut = pos + pdfH;
-                  var cut = idealCut >= pgH ? pgH : snapCut(idealCut, boundaries);
-                  // Ensure we always advance at least 1px to prevent infinite loops.
-                  if (cut <= pos) cut = Math.min(pos + pdfH, pgH);
-                  var sliceH = cut - pos;
-
-                  var srcY = pos * scale;
-                  var srcH = sliceH * scale;
-
-                  var slice = document.createElement('canvas');
-                  slice.width = canvas.width;
-                  slice.height = srcH;
-                  var ctx = slice.getContext('2d');
-                  ctx.fillStyle = '#ffffff';
-                  ctx.fillRect(0, 0, slice.width, slice.height);
-                  ctx.drawImage(canvas, 0, srcY, canvas.width, srcH, 0, 0, canvas.width, srcH);
-
-                  var pageHeightPt = sliceH;
-                  if (pdf === null) {
-                    pdf = new jsPDFLib.jsPDF({ unit: 'px', format: [pdfW, pageHeightPt], compress: true });
-                  } else {
-                    pdf.addPage([pdfW, pageHeightPt], 'portrait');
-                  }
-                  isFirst = false;
-                  pdf.addImage(slice.toDataURL('image/jpeg', 0.92), 'JPEG', 0, 0, pdfW, pageHeightPt, undefined, 'FAST');
-
-                  pos = cut;
-                }
-              });
+          var totalSlices = Math.round(paddedH / pdfH);
+          for (var i = 0; i < totalSlices; i++) {
+            if (!isFirstPage) {
+              pdf.addPage([pdfW, pdfH]);
             }
-          });
-        });
+            isFirstPage = false;
 
-        return chain.then(function() {
-          if (pdf) pdf.save(filename);
-          dlLabel.textContent = 'Save as PDF';
-          dlBtn.disabled = false;
-        });
+            var sliceCanvas = document.createElement('canvas');
+            sliceCanvas.width = pdfW * 2;
+            sliceCanvas.height = pdfH * 2;
+            var ctx = sliceCanvas.getContext('2d');
+            ctx.fillStyle = '#ffffff';
+            ctx.fillRect(0, 0, sliceCanvas.width, sliceCanvas.height);
+            ctx.drawImage(canvas, 0, -(i * pdfH * 2));
+
+            var imgData = sliceCanvas.toDataURL('image/jpeg', 0.95);
+            pdf.addImage(imgData, 'JPEG', 0, 0, pdfW, pdfH);
+          }
+
+          page.style.paddingBottom = '';
+        }
+
+        var slug = filename.replace(/^PercIQ-/, '').replace(/\.pdf$/, '');
+        pdf.save('PercIQ-' + slug + '.pdf');
+        dlLabel.textContent = 'Save as PDF';
+        dlBtn.disabled = false;
       }).catch(function(err) {
         console.error('PDF generation failed', err);
         dlLabel.textContent = 'Save as PDF';
