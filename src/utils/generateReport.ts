@@ -1123,50 +1123,107 @@ export function generateReportHTML(data: ReportData, meta?: { shareUrl?: string;
         loadScript('https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js'),
         loadScript('https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js')
       ]).then(function() {
-        var pages = Array.from(document.querySelectorAll('.page'));
         var pdfW = 816, pdfH = 1056;
+        var TALL_THRESHOLD = 1200;
+        var SNAP_MARGIN = 80;
+        var scale = 2;
         var jsPDFLib = window.jspdf || window.jsPDF;
-        var pdf = new jsPDFLib.jsPDF({ unit: 'px', format: [pdfW, pdfH], compress: true });
-        var pgEls = document.querySelectorAll('.pg');
-        pgEls.forEach(function(pg) {
-          var h = pg.getBoundingClientRect().height;
-          var remainder = h % 1056;
-          if (remainder > 0) {
-            pg.style.paddingBottom = (1056 - remainder) + 'px';
+        var pgEls = Array.from(document.querySelectorAll('.pg'));
+        var isFirst = true;
+
+        // Build sorted list of card boundary Y offsets (relative to pg top) for a tall pg.
+        function getCardBoundaries(pg) {
+          var pgTop = pg.getBoundingClientRect().top;
+          var cards = Array.from(pg.querySelectorAll('.zone-card, .soil-row, .series-row'));
+          var boundaries = [0];
+          cards.forEach(function(card) {
+            var r = card.getBoundingClientRect();
+            boundaries.push(Math.round(r.top - pgTop));
+            boundaries.push(Math.round(r.bottom - pgTop));
+          });
+          return boundaries.sort(function(a, b) { return a - b; });
+        }
+
+        // Snap a cut point to the nearest card boundary if within SNAP_MARGIN px.
+        function snapCut(cut, boundaries) {
+          var best = cut, bestDist = SNAP_MARGIN + 1;
+          for (var i = 0; i < boundaries.length; i++) {
+            var d = Math.abs(boundaries[i] - cut);
+            if (d < bestDist) { bestDist = d; best = boundaries[i]; }
           }
-        });
+          return best;
+        }
+
+        var pdf = null;
         var chain = Promise.resolve();
-        pages.forEach(function(page, i) {
+
+        pgEls.forEach(function(pg) {
           chain = chain.then(function() {
-            var pageH = Math.round(page.getBoundingClientRect().height) || pdfH;
-            return html2canvas(page, {
-              scale: 2, useCORS: true, allowTaint: true,
-              backgroundColor: '#ffffff',
-              width: pdfW, height: pageH,
-              windowWidth: pdfW, windowHeight: pageH,
-            }).then(function(canvas) {
-              // scale:2 means canvas dimensions are 2× CSS pixels
-              var scale = 2;
-              var totalSlices = Math.ceil(pageH / pdfH);
-              for (var p = 0; p < totalSlices; p++) {
-                if (i > 0 || p > 0) pdf.addPage([pdfW, pdfH], 'portrait');
-                var srcY = p * pdfH * scale;
-                var srcH = Math.min(pdfH * scale, canvas.height - srcY);
-                if (srcH <= 0) break;
-                var slice = document.createElement('canvas');
-                slice.width = canvas.width;
-                slice.height = pdfH * scale; // always full page height so jsPDF fills page
-                var ctx = slice.getContext('2d');
-                ctx.fillStyle = '#ffffff';
-                ctx.fillRect(0, 0, slice.width, slice.height);
-                ctx.drawImage(canvas, 0, srcY, canvas.width, srcH, 0, 0, canvas.width, srcH);
-                pdf.addImage(slice.toDataURL('image/jpeg', 0.92), 'JPEG', 0, 0, pdfW, pdfH, undefined, 'FAST');
-              }
-            });
+            var pgH = Math.round(pg.getBoundingClientRect().height) || pdfH;
+
+            if (pgH <= TALL_THRESHOLD) {
+              // Short section: single PDF page sized to content height.
+              return html2canvas(pg, {
+                scale: scale, useCORS: true, allowTaint: true,
+                backgroundColor: '#ffffff',
+                width: pdfW, height: pgH,
+                windowWidth: pdfW, windowHeight: pgH,
+              }).then(function(canvas) {
+                var pageHeightPt = pgH;
+                if (pdf === null) {
+                  pdf = new jsPDFLib.jsPDF({ unit: 'px', format: [pdfW, pageHeightPt], compress: true });
+                } else {
+                  pdf.addPage([pdfW, pageHeightPt], 'portrait');
+                }
+                isFirst = false;
+                pdf.addImage(canvas.toDataURL('image/jpeg', 0.92), 'JPEG', 0, 0, pdfW, pageHeightPt, undefined, 'FAST');
+              });
+            } else {
+              // Tall section: smart-sliced into pdfH strips with card-boundary snapping.
+              var boundaries = getCardBoundaries(pg);
+              return html2canvas(pg, {
+                scale: scale, useCORS: true, allowTaint: true,
+                backgroundColor: '#ffffff',
+                width: pdfW, height: pgH,
+                windowWidth: pdfW, windowHeight: pgH,
+              }).then(function(canvas) {
+                var pos = 0;
+                while (pos < pgH) {
+                  var idealCut = pos + pdfH;
+                  var cut = idealCut >= pgH ? pgH : snapCut(idealCut, boundaries);
+                  // Ensure we always advance at least 1px to prevent infinite loops.
+                  if (cut <= pos) cut = Math.min(pos + pdfH, pgH);
+                  var sliceH = cut - pos;
+
+                  var srcY = pos * scale;
+                  var srcH = sliceH * scale;
+
+                  var slice = document.createElement('canvas');
+                  slice.width = canvas.width;
+                  slice.height = srcH;
+                  var ctx = slice.getContext('2d');
+                  ctx.fillStyle = '#ffffff';
+                  ctx.fillRect(0, 0, slice.width, slice.height);
+                  ctx.drawImage(canvas, 0, srcY, canvas.width, srcH, 0, 0, canvas.width, srcH);
+
+                  var pageHeightPt = sliceH;
+                  if (pdf === null) {
+                    pdf = new jsPDFLib.jsPDF({ unit: 'px', format: [pdfW, pageHeightPt], compress: true });
+                  } else {
+                    pdf.addPage([pdfW, pageHeightPt], 'portrait');
+                  }
+                  isFirst = false;
+                  pdf.addImage(slice.toDataURL('image/jpeg', 0.92), 'JPEG', 0, 0, pdfW, pageHeightPt, undefined, 'FAST');
+
+                  pos = cut;
+                }
+              });
+            }
           });
         });
+
         return chain.then(function() {
-          pdf.save(filename);
+          if (pdf) pdf.save(filename);
           dlLabel.textContent = 'Save as PDF';
           dlBtn.disabled = false;
         });
