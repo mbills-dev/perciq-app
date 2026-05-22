@@ -1127,6 +1127,14 @@ export function generateReportHTML(data: ReportData, meta?: { shareUrl?: string;
         var pdfW = 816, pdfH = 1056;
         var jsPDFLib = window.jspdf || window.jsPDF;
         var pdf = new jsPDFLib.jsPDF({ unit: 'px', format: [pdfW, pdfH], compress: true });
+        var pgEls = container.querySelectorAll('.pg');
+        pgEls.forEach(function(pg) {
+          var h = pg.getBoundingClientRect().height;
+          var remainder = h % 1056;
+          if (remainder > 0) {
+            pg.style.paddingBottom = (1056 - remainder) + 'px';
+          }
+        });
         var chain = Promise.resolve();
         pages.forEach(function(page, i) {
           chain = chain.then(function() {
