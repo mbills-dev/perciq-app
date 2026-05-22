@@ -153,6 +153,7 @@ function buildSeriesRows(series: SeriesData[]): string {
     const ksatDisplay = s.ksat > 0 ? s.ksat.toFixed(1) : '\u2014';
     const drainColor = s.bestScore >= 45 ? 'var(--g)' : '#FF9F09';
     return `
+        <div style="page-break-inside:avoid;break-inside:avoid">
         <div style="display:grid;grid-template-columns:22px 1fr 80px 72px 60px 110px;align-items:center;padding:10px 14px;${rowBorder}">
           <div style="width:9px;height:9px;border-radius:50%;background:${dot};flex-shrink:0"></div>
           <div style="min-width:0">
@@ -178,6 +179,7 @@ function buildSeriesRows(series: SeriesData[]): string {
         </div>
         <div style="padding:6px 14px 8px 44px;${descBorder};background:${descBg}">
           <div style="font-size:11px;font-weight:400;color:var(--ink3);line-height:1.5">Score: <strong style="color:${dot}">${Math.round(s.bestScore)}</strong> &nbsp;\u00b7&nbsp; ${s.drainage ? s.drainage + ' drainage' : 'Drainage data unavailable'}${s.ksat > 0 ? ` &nbsp;\u00b7&nbsp; ksat ${ksatDisplay} \u03bcm/s` : ''}</div>
+        </div>
         </div>`;
   }).join('');
 }
@@ -409,15 +411,19 @@ body{
 
 .page{
   width:var(--page-w);
-  min-height:var(--page-h);
   background:#fff;
   margin:24px auto;
-  position:relative;overflow:hidden;
+  position:relative;
   page-break-after:always;
+  break-after:page;
   box-shadow:0 8px 40px rgba(0,0,0,0.14);
 }
 
-.cover{display:flex;flex-direction:column;background:#fff}
+.cover{
+  display:flex;flex-direction:column;background:#fff;
+  height:var(--page-h);
+  overflow:hidden;
+}
 
 .cov-nav{
   padding:26px 52px;
@@ -566,6 +572,8 @@ body{
   border:1px solid var(--glass-border);
   border-radius:var(--r);
   margin-bottom:11px;overflow:hidden;
+  page-break-inside:avoid;
+  break-inside:avoid;
 }
 
 .zc-head{
@@ -634,6 +642,8 @@ body{
   border:1px solid var(--glass-border);
   border-radius:var(--r);
   overflow:hidden;
+  page-break-inside:avoid;
+  break-inside:avoid;
 }
 .rc-bar{height:4px}
 .rcb-g{background:var(--g)}
@@ -677,6 +687,8 @@ body{
   background:var(--g-bg);
   position:relative;display:flex;
   align-items:center;justify-content:center;flex-direction:column;gap:8px;
+  page-break-inside:avoid;
+  break-inside:avoid;
 }
 .map-slot img{
   position:absolute;inset:0;width:100%;height:100%;
@@ -698,6 +710,8 @@ body{
 .pin-card{
   background:var(--surface);border:1px solid var(--glass-border);
   border-radius:var(--r);overflow:hidden;
+  page-break-inside:avoid;
+  break-inside:avoid;
 }
 .pc-head{
   padding:9px 14px;
@@ -744,11 +758,11 @@ body{
 
 @media print {
   body{background:#fff}
+  @page{size:letter portrait;margin:0}
   .page{
     box-shadow:none;
     margin:0;
-    width:100%;
-    min-height:auto;
+    width:816px;
     page-break-after:always;
     break-after:page;
   }
@@ -756,9 +770,14 @@ body{
     page-break-after:auto;
     break-after:auto;
   }
+  .cover{
+    height:1056px;
+    overflow:hidden;
+  }
   .zone-card,
   .risk-card,
   .pin-card,
+  .map-slot,
   .disc,
   .data-note,
   .mc,
@@ -767,6 +786,10 @@ body{
     break-inside:avoid;
   }
   .pg-hdr{
+    page-break-after:avoid;
+    break-after:avoid;
+  }
+  .pg-sec{
     page-break-after:avoid;
     break-after:avoid;
   }
@@ -1106,16 +1129,31 @@ export function generateReportHTML(data: ReportData, meta?: { shareUrl?: string;
         var chain = Promise.resolve();
         pages.forEach(function(page, i) {
           chain = chain.then(function() {
+            var pageH = Math.round(page.getBoundingClientRect().height) || pdfH;
             return html2canvas(page, {
               scale: 2, useCORS: true, allowTaint: true,
               backgroundColor: '#ffffff',
-              width: pdfW, height: pdfH,
-              windowWidth: pdfW, windowHeight: pdfH,
+              width: pdfW, height: pageH,
+              windowWidth: pdfW, windowHeight: pageH,
+            }).then(function(canvas) {
+              // scale:2 means canvas dimensions are 2× CSS pixels
+              var scale = 2;
+              var totalSlices = Math.ceil(pageH / pdfH);
+              for (var p = 0; p < totalSlices; p++) {
+                if (i > 0 || p > 0) pdf.addPage([pdfW, pdfH], 'portrait');
+                var srcY = p * pdfH * scale;
+                var srcH = Math.min(pdfH * scale, canvas.height - srcY);
+                if (srcH <= 0) break;
+                var slice = document.createElement('canvas');
+                slice.width = canvas.width;
+                slice.height = pdfH * scale; // always full page height so jsPDF fills page
+                var ctx = slice.getContext('2d');
+                ctx.fillStyle = '#ffffff';
+                ctx.fillRect(0, 0, slice.width, slice.height);
+                ctx.drawImage(canvas, 0, srcY, canvas.width, srcH, 0, 0, canvas.width, srcH);
+                pdf.addImage(slice.toDataURL('image/jpeg', 0.92), 'JPEG', 0, 0, pdfW, pdfH, undefined, 'FAST');
+              }
             });
-          }).then(function(canvas) {
-            var imgData = canvas.toDataURL('image/jpeg', 0.92);
-            if (i > 0) pdf.addPage([pdfW, pdfH], 'portrait');
-            pdf.addImage(imgData, 'JPEG', 0, 0, pdfW, pdfH, undefined, 'FAST');
           });
         });
         return chain.then(function() {
