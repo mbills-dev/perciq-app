@@ -1050,7 +1050,7 @@ export function generateReportHTML(data: ReportData, meta?: { shareUrl?: string;
     <div class="method-lbl">Methodology</div>
     <div class="method-cols">
       <div class="mc"><div class="mc-t">Data Sources</div><div class="mc-b">Soil data from USDA SSURGO via Soil Data Access API. Flood zones from FEMA National Flood Hazard Layer. Wetland boundaries from USFWS National Wetlands Inventory. Parcel boundaries from Regrid national parcel database.</div></div>
-      <div class="mc"><div class="mc-t">Score Calculation</div><div class="mc-b">Each soil unit is scored on drainage class (25%), hydraulic conductivity (25%), slope (25%), and water table depth (25%). Base score adjusted for flood overlap (up to \u201335%) and wetland overlap (up to \u201314%). Viable = 65+, Engineering Needed = 35\u201364, Not Suitable = &lt;35.</div></div>
+      <div class="mc"><div class="mc-t">How Scores Are Calculated</div><div class="mc-b">Each soil unit is evaluated across four key factors: drainage class, hydraulic conductivity, slope, and water table depth. Scores are then adjusted to account for FEMA flood zone overlap and NWI wetland coverage within the zone.<br><br><strong>Viable (65\u2013100):</strong> Soil conditions are favorable for conventional septic systems.<br><strong>Engineering Needed (35\u201364):</strong> Marginal conditions or significant flood/wetland overlap. Alternative or engineered systems may be required.<br><strong>Not Suitable (&lt;35):</strong> Significant constraints present. Conventional septic is unlikely without major site modifications.<br><br>Scores are directional pre-screens based on USDA SSURGO soil survey data and should not substitute for a licensed site evaluation.</div></div>
     </div>
 
     <div class="disc">
