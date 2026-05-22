@@ -1174,7 +1174,6 @@ export function generateReportHTML(data: ReportData, meta?: { shareUrl?: string;
         console.error('PDF generation failed', err);
         dlLabel.textContent = 'Save as PDF';
         dlBtn.disabled = false;
-        window.print();
       });
     });
   }
