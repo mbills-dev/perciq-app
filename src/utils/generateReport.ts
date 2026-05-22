@@ -1127,44 +1127,56 @@ export function generateReportHTML(data: ReportData, meta?: { shareUrl?: string;
         var jsPDFLib = window.jspdf || window.jsPDF;
         var pdf = new jsPDFLib.jsPDF({ unit: 'px', format: [pdfW, pdfH], orientation: 'portrait' });
         var isFirstPage = true;
-        var pages = Array.from(document.querySelectorAll('.pg'));
+        var pages = Array.from(document.querySelectorAll('.cover, .pg'));
 
         for (var pi = 0; pi < pages.length; pi++) {
           var page = pages[pi];
-          var rawH = page.getBoundingClientRect().height;
-          var remainder = rawH % pdfH;
-          var paddedH = remainder > 0 ? rawH + (pdfH - remainder) : rawH;
-          page.style.paddingBottom = (paddedH - rawH) + 'px';
+          var rawH = Math.ceil(page.getBoundingClientRect().height);
+
+          // Only slice into multiple pages if content genuinely overflows one page.
+          // For sections <= pdfH, emit a single page sized to the content height so
+          // there is no trailing whitespace. For taller sections, pad up to the next
+          // pdfH multiple so slices divide evenly, then slice.
+          var captureH, totalSlices;
+          if (rawH <= pdfH) {
+            captureH = rawH;
+            totalSlices = 1;
+          } else {
+            var remainder = rawH % pdfH;
+            captureH = remainder > 0 ? rawH + (pdfH - remainder) : rawH;
+            page.style.paddingBottom = (captureH - rawH) + 'px';
+            totalSlices = Math.round(captureH / pdfH);
+          }
 
           var canvas = await html2canvas(page, {
             scale: 2,
             width: pdfW,
-            height: paddedH,
+            height: captureH,
             useCORS: true,
             allowTaint: true,
             backgroundColor: '#ffffff'
           });
 
-          var totalSlices = Math.round(paddedH / pdfH);
           for (var i = 0; i < totalSlices; i++) {
+            var pageH = totalSlices === 1 ? rawH : pdfH;
             if (!isFirstPage) {
-              pdf.addPage([pdfW, pdfH]);
+              pdf.addPage([pdfW, pageH]);
             }
             isFirstPage = false;
 
             var sliceCanvas = document.createElement('canvas');
             sliceCanvas.width = pdfW * 2;
-            sliceCanvas.height = pdfH * 2;
+            sliceCanvas.height = pageH * 2;
             var ctx = sliceCanvas.getContext('2d');
             ctx.fillStyle = '#ffffff';
             ctx.fillRect(0, 0, sliceCanvas.width, sliceCanvas.height);
             ctx.drawImage(canvas, 0, -(i * pdfH * 2));
 
             var imgData = sliceCanvas.toDataURL('image/jpeg', 0.95);
-            pdf.addImage(imgData, 'JPEG', 0, 0, pdfW, pdfH);
+            pdf.addImage(imgData, 'JPEG', 0, 0, pdfW, pageH);
           }
 
-          page.style.paddingBottom = '';
+          if (rawH > pdfH) page.style.paddingBottom = '';
         }
 
         var slug = filename.replace(/^PercIQ-/, '').replace(/\.pdf$/, '');
