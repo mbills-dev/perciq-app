@@ -131,7 +131,7 @@ function ExpandedDetail({ row }: { row: ParcelRow }) {
 
   return (
     <div style={{ padding: '12px 20px 16px', borderTop: '1px solid rgba(255,255,255,0.06)' }}>
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 8 }}>
+      <div className="grid grid-cols-2 sm:grid-cols-4" style={{ gap: 8 }}>
         {cards.map(c => (
           <DetailCard key={c.label} label={c.label} value={c.value} borderColor={c.border} valueColor={c.valueColor} />
         ))}
@@ -795,7 +795,7 @@ export default function Dashboard({ onViewReport, onCreateReport }: DashboardPro
   return (
     <div style={{ maxWidth: 1100, margin: '0 auto' }}>
       {/* Header */}
-      <div className="flex items-start justify-between mb-6">
+      <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-3 mb-6">
         <div>
           <h2 style={{ fontSize: 22, fontWeight: 700, color: '#fff', letterSpacing: '-0.3px', marginBottom: 4 }}>Dashboard</h2>
           <p style={{ fontSize: 13, color: 'rgba(255,255,255,0.40)' }}>Soil suitability across your land portfolio</p>
@@ -804,8 +804,9 @@ export default function Dashboard({ onViewReport, onCreateReport }: DashboardPro
           onClick={() => setShowModal(true)}
           style={{
             background: '#30D158', color: '#000', border: 'none', borderRadius: 9,
-            padding: '10px 18px', fontWeight: 700, fontSize: 13, cursor: 'pointer',
-            display: 'flex', alignItems: 'center', gap: 7, flexShrink: 0,
+            padding: '11px 18px', fontWeight: 700, fontSize: 13, cursor: 'pointer',
+            display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 7, flexShrink: 0,
+            minHeight: 44,
           }}
         >
           <Plus className="w-4 h-4" />
@@ -814,7 +815,7 @@ export default function Dashboard({ onViewReport, onCreateReport }: DashboardPro
       </div>
 
       {/* Stat cards */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 12, marginBottom: 16 }}>
+      <div className="grid grid-cols-2 sm:grid-cols-4" style={{ gap: 12, marginBottom: 16 }}>
         {statCards.map(card => {
           const isActive = filter === card.id;
           return (
@@ -846,13 +847,13 @@ export default function Dashboard({ onViewReport, onCreateReport }: DashboardPro
       {/* Score distribution bar */}
       {!loading && analyzed > 0 && (
         <div className="card p-4 mb-5">
-          <div className="flex items-center gap-4">
-            <div style={{ flex: 1, height: 6, borderRadius: 3, background: 'rgba(255,255,255,0.06)', overflow: 'hidden', display: 'flex' }}>
+          <div className="flex flex-col gap-2">
+            <div style={{ height: 6, borderRadius: 3, background: 'rgba(255,255,255,0.06)', overflow: 'hidden', display: 'flex' }}>
               {suitable > 0 && <div style={{ height: '100%', width: `${(suitable / analyzed) * 100}%`, background: '#30D158', transition: 'width 0.7s' }} />}
               {marginal > 0 && <div style={{ height: '100%', width: `${(marginal / analyzed) * 100}%`, background: '#FF9F0A', transition: 'width 0.7s' }} />}
               {unsuitable > 0 && <div style={{ height: '100%', width: `${(unsuitable / analyzed) * 100}%`, background: '#FF453A', transition: 'width 0.7s' }} />}
             </div>
-            <div className="flex items-center gap-4 flex-shrink-0" style={{ fontSize: 11, color: 'rgba(255,255,255,0.45)' }}>
+            <div className="flex flex-wrap items-center gap-3" style={{ fontSize: 11, color: 'rgba(255,255,255,0.45)' }}>
               <span className="flex items-center gap-1.5"><span style={{ width: 7, height: 7, borderRadius: '50%', background: '#30D158', display: 'inline-block' }} />Suitable {suitable}</span>
               <span className="flex items-center gap-1.5"><span style={{ width: 7, height: 7, borderRadius: '50%', background: '#FF9F0A', display: 'inline-block' }} />Marginal {marginal}</span>
               <span className="flex items-center gap-1.5"><span style={{ width: 7, height: 7, borderRadius: '50%', background: '#FF453A', display: 'inline-block' }} />Unsuitable {unsuitable}</span>
@@ -865,8 +866,8 @@ export default function Dashboard({ onViewReport, onCreateReport }: DashboardPro
       <div className="card overflow-hidden">
         {/* Section header + search + filter tabs */}
         <div style={{ padding: '16px 20px 12px', borderBottom: '1px solid rgba(255,255,255,0.06)' }}>
-          <div className="flex items-center justify-between mb-3">
-            <div className="flex items-center gap-2">
+          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 mb-3">
+            <div className="flex items-center gap-2 flex-shrink-0">
               <h3 style={{ fontSize: 14, fontWeight: 600, color: '#fff' }}>All parcels</h3>
               <span style={{
                 fontSize: 11, fontWeight: 600, color: 'rgba(255,255,255,0.45)',
@@ -877,7 +878,7 @@ export default function Dashboard({ onViewReport, onCreateReport }: DashboardPro
               </span>
             </div>
             {/* Search */}
-            <div style={{ position: 'relative', width: 220 }}>
+            <div style={{ position: 'relative', width: '100%', maxWidth: 280 }}>
               <Search style={{ position: 'absolute', left: 10, top: '50%', transform: 'translateY(-50%)', width: 14, height: 14, color: 'rgba(255,255,255,0.30)' }} />
               <input
                 type="text"
@@ -979,13 +980,13 @@ export default function Dashboard({ onViewReport, onCreateReport }: DashboardPro
                     </div>
 
                     {/* Scores */}
-                    <div className="flex items-center gap-5 flex-shrink-0">
+                    <div className="hidden sm:flex items-center gap-5 flex-shrink-0">
                       <ScoreBadge score={zoneScore} label="Best Zone" />
                       <ScoreBadge score={overallScore} label="Overall" />
                     </div>
 
                     {/* Action buttons */}
-                    <div className="flex items-center gap-2 flex-shrink-0" onClick={e => e.stopPropagation()}>
+                    <div className="hidden sm:flex items-center gap-2 flex-shrink-0" onClick={e => e.stopPropagation()}>
                       <button
                         onClick={() => handleOpenMap(row)}
                         style={{
@@ -1055,6 +1056,30 @@ export default function Dashboard({ onViewReport, onCreateReport }: DashboardPro
                       {isExpanded ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
                     </div>
                   </div>
+
+                  {/* Mobile scores + action — shown inline below address on small screens */}
+                  {isExpanded && (
+                    <div className="flex sm:hidden items-center justify-between px-5 pb-3 gap-3" onClick={e => e.stopPropagation()}>
+                      <div className="flex items-center gap-4">
+                        <ScoreBadge score={zoneScore} label="Best Zone" />
+                        <ScoreBadge score={overallScore} label="Overall" />
+                      </div>
+                      <button
+                        onClick={() => handleOpenMap(row)}
+                        style={{
+                          display: 'flex', alignItems: 'center', gap: 5,
+                          background: 'rgba(48,209,88,0.12)',
+                          border: '1px solid rgba(48,209,88,0.5)',
+                          borderRadius: 7, padding: '8px 14px',
+                          color: '#30D158', fontSize: 13, fontWeight: 600, cursor: 'pointer',
+                          minHeight: 44,
+                        }}
+                      >
+                        <MapIcon className="w-3.5 h-3.5" />
+                        Open map
+                      </button>
+                    </div>
+                  )}
 
                   {/* Expanded detail */}
                   {isExpanded && <ExpandedDetail row={row} />}

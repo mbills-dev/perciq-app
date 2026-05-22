@@ -206,7 +206,7 @@ export default function SettingsPage({ user }: Props) {
             <p className="text-xs text-white/35 mb-5">Update your personal information</p>
 
             <form onSubmit={handleSaveProfile} className="space-y-4">
-              <div className="grid grid-cols-2 gap-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div>
                   <label className={LABEL}>First Name</label>
                   <input className={INPUT} value={firstName} onChange={e => setFirstName(e.target.value)} placeholder="First name" />
@@ -353,7 +353,7 @@ export default function SettingsPage({ user }: Props) {
                 <label className={LABEL}>Address Line 2</label>
                 <input className={INPUT} value={addr2} onChange={e => setAddr2(e.target.value)} placeholder="Apt, suite, unit (optional)" />
               </div>
-              <div className="grid grid-cols-2 gap-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div>
                   <label className={LABEL}>City</label>
                   <input className={INPUT} value={city} onChange={e => setCity(e.target.value)} placeholder="City" />
@@ -363,7 +363,7 @@ export default function SettingsPage({ user }: Props) {
                   <input className={INPUT} value={state} onChange={e => setState(e.target.value)} placeholder="NC" maxLength={2} />
                 </div>
               </div>
-              <div className="grid grid-cols-2 gap-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div>
                   <label className={LABEL}>Postal Code</label>
                   <input className={INPUT} value={postal} onChange={e => setPostal(e.target.value)} placeholder="27701" />

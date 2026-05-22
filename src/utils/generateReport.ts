@@ -796,6 +796,48 @@ body{
   .dl-bar{display:none!important}
 }
 
+@media screen and (max-width:600px){
+  body{padding:0}
+  .page{width:100%;max-width:100%;box-shadow:none;margin:0}
+  .cover{height:auto;min-height:0}
+  .pg{min-height:0}
+
+  .cov-hero{padding:28px 20px 20px}
+  .cov-headline{font-size:34px}
+  .cov-sub{font-size:14px;margin-bottom:24px}
+  .cov-property{padding:0 20px;flex-direction:column;gap:12px}
+  .cp-right{align-items:flex-start}
+  .cov-verdict{padding:0 20px}
+  .cov-chips{padding:0 20px}
+  .cov-foot{padding:12px 20px 16px}
+
+  .cov-scores{grid-template-columns:1fr;gap:10px;margin-bottom:20px}
+  .sc-card{flex-direction:row;align-items:center;padding:14px 16px;gap:14px}
+  .sc-label,.sc-sub{text-align:left}
+
+  .pg-hdr{padding:18px 16px 0}
+  .pg-rule{margin:12px 16px 0}
+  .pg-body{padding:14px 16px}
+  .pg-foot{padding:8px 16px 12px}
+  .pg-title{font-size:18px}
+
+  .zc-body{grid-template-columns:1fr;grid-template-rows:auto 1px auto}
+  .zc-sep{height:1px;width:100%}
+  .zc-factors{padding:12px 14px}
+  .zc-ins{padding:10px 14px}
+  .zc-stats{grid-template-columns:1fr 1fr 1fr}
+  .zc-stat{padding:8px 10px}
+
+  .risk-grid{grid-template-columns:1fr}
+
+  .pin-grid{grid-template-columns:1fr}
+
+  .method-cols{grid-template-columns:1fr}
+
+  .dl-bar{padding:10px 14px}
+  .dl-info{font-size:11px}
+}
+
 .dl-bar{
   position:fixed;bottom:0;left:0;right:0;z-index:9999;
   background:rgba(10,15,30,0.94);

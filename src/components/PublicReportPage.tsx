@@ -275,13 +275,13 @@ export default function PublicReportPage({ reportId }: PublicReportPageProps) {
           background: 'rgba(10,15,30,0.92)',
           backdropFilter: 'blur(14px)',
           borderBottom: '1px solid rgba(255,255,255,0.06)',
-          padding: '10px 20px',
-          display: 'flex', alignItems: 'center', gap: 12,
+          padding: '10px 16px',
+          display: 'flex', alignItems: 'center', gap: 10,
         }}
       >
         <a
           href="https://app.perciq.co"
-          style={{ display: 'flex', alignItems: 'center', gap: 8, textDecoration: 'none' }}
+          style={{ display: 'flex', alignItems: 'center', gap: 7, textDecoration: 'none', flexShrink: 0 }}
         >
           <div style={{
             width: 26, height: 26, background: 'rgba(34,197,94,0.18)',
@@ -293,12 +293,12 @@ export default function PublicReportPage({ reportId }: PublicReportPageProps) {
           <span style={{ fontWeight: 900, fontSize: 14, color: '#fff', letterSpacing: '-0.02em' }}>PercIQ</span>
         </a>
 
-        <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ flex: 1, minWidth: 0, overflow: 'hidden' }}>
           <p style={{
             fontSize: 11, color: 'rgba(255,255,255,0.45)', overflow: 'hidden',
             textOverflow: 'ellipsis', whiteSpace: 'nowrap',
           }}>
-            Soil Suitability Report &nbsp;·&nbsp; {address}
+            {address}
           </p>
         </div>
 
@@ -306,18 +306,20 @@ export default function PublicReportPage({ reportId }: PublicReportPageProps) {
           onClick={handleDownloadPdf}
           disabled={pdfLoading}
           style={{
-            display: 'flex', alignItems: 'center', gap: 6,
-            padding: '7px 14px', borderRadius: 8,
+            display: 'flex', alignItems: 'center', gap: 5,
+            padding: '8px 12px', borderRadius: 8,
             background: '#22C55E', border: 'none',
             color: '#fff', fontSize: 12, fontWeight: 700,
             cursor: pdfLoading ? 'default' : 'pointer',
             opacity: pdfLoading ? 0.7 : 1,
             flexShrink: 0,
             letterSpacing: '0.01em',
+            minHeight: 44,
+            whiteSpace: 'nowrap',
           }}
         >
           <Download size={11} />
-          {isLoggedIn ? 'Download PDF' : 'Sign in to Download'}
+          {isLoggedIn ? 'Download PDF' : 'Sign in'}
         </button>
       </div>
 
@@ -326,20 +328,20 @@ export default function PublicReportPage({ reportId }: PublicReportPageProps) {
         style={{ fontFamily: "'Inter', -apple-system, BlinkMacSystemFont, system-ui, sans-serif" }}
       />
 
-      <div style={{
+      <div className="public-cta-bar" style={{
         position: 'fixed', bottom: 0, left: 0, right: 0, zIndex: 200,
         background: 'rgba(10,15,30,0.96)',
         backdropFilter: 'blur(16px)',
         borderTop: '1px solid rgba(34,197,94,0.2)',
-        padding: '12px 20px',
-        display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12,
+        padding: '10px 16px',
+        display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10,
       }}>
-        <div style={{ minWidth: 0 }}>
-          <p style={{ fontSize: 13, fontWeight: 600, color: '#fff', letterSpacing: '-0.01em' }}>
-            Run your own parcel analysis free at perciq.co
+        <div style={{ minWidth: 0, flex: 1 }}>
+          <p style={{ fontSize: 12, fontWeight: 600, color: '#fff', letterSpacing: '-0.01em', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+            Run your own parcel analysis free
           </p>
-          <p style={{ fontSize: 11, color: 'rgba(255,255,255,0.40)', marginTop: 1 }}>
-            Soil suitability screening using USDA, FEMA &amp; NWI data — in minutes
+          <p style={{ fontSize: 10, color: 'rgba(255,255,255,0.40)', marginTop: 1 }}>
+            Soil screening using USDA, FEMA &amp; NWI data
           </p>
         </div>
         <a
@@ -347,16 +349,17 @@ export default function PublicReportPage({ reportId }: PublicReportPageProps) {
           target="_blank"
           rel="noopener noreferrer"
           style={{
-            display: 'inline-flex', alignItems: 'center', gap: 6,
-            padding: '9px 16px', borderRadius: 9,
+            display: 'inline-flex', alignItems: 'center', gap: 5,
+            padding: '9px 14px', borderRadius: 9,
             background: '#22C55E', color: '#fff',
             fontSize: 12, fontWeight: 700,
             textDecoration: 'none', whiteSpace: 'nowrap',
             flexShrink: 0, letterSpacing: '0.01em',
+            minHeight: 44,
           }}
         >
           <ExternalLink size={11} />
-          Get started free
+          Get started
         </a>
       </div>
     </div>

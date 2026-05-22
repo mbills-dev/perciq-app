@@ -4271,7 +4271,7 @@ export default function ReportDetail({ reportId, onBack, isPublic = false }: Rep
           )}
 
           {/* Data Sources — compressed strip */}
-          <div className="flex items-center gap-4" style={{ height: 28 }}>
+          <div className="flex flex-wrap items-center gap-3" style={{ minHeight: 28 }}>
             <div className="flex items-center gap-1.5">
               <CheckCircle className="w-3 h-3 flex-shrink-0" style={{ color: '#30D158' }} />
               <span style={{ fontSize: 10, color: 'rgba(255,255,255,0.38)', letterSpacing: '0.3px' }}>SSURGO</span>
@@ -4366,7 +4366,7 @@ export default function ReportDetail({ reportId, onBack, isPublic = false }: Rep
           )}
 
           {/* Zone tabs */}
-          <div className="flex gap-1.5">
+          <div className="flex flex-wrap gap-1.5">
             {tabConfig.map(tab => {
               const isActive = activeTab === tab.key && !hudHover;
               return (
@@ -4408,7 +4408,7 @@ export default function ReportDetail({ reportId, onBack, isPublic = false }: Rep
             </p>
 
             {/* Inline stats row */}
-            <div style={{ display: 'flex', alignItems: 'center', gap: 0, background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.07)', borderRadius: 8, overflow: 'hidden' }}>
+            <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr 1fr 1fr', alignItems: 'stretch', background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.07)', borderRadius: 8, overflow: 'hidden' }}>
               {[
                 { label: 'Soil series', value: hudData ? hudData.soilName.split(' ').slice(0, 3).join(' ') : (mapSoilPolygons[0] ? String((mapSoilPolygons[0].geojson.properties as Record<string,unknown>)?.muname ?? '—').split(' ').slice(0,3).join(' ') : '—') },
                 { label: 'Flood', value: hudData ? `${hudData.floodOverlapPct}%` : `${floodPct}%` },
@@ -4423,10 +4423,10 @@ export default function ReportDetail({ reportId, onBack, isPublic = false }: Rep
                   })() : `${viableAcres} ac viable` },
               ].map(({ label, value }, i, arr) => (
                 <div key={label} style={{
-                  flex: i === 0 ? 2 : 1,
-                  padding: '6px 10px',
+                  padding: '6px 8px',
                   borderRight: i < arr.length - 1 ? '1px solid rgba(255,255,255,0.06)' : 'none',
                   minWidth: 0,
+                  overflow: 'hidden',
                 }}>
                   <p style={{ fontSize: 8, color: 'rgba(255,255,255,0.30)', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: 2, whiteSpace: 'nowrap' }}>{label}</p>
                   <p style={{ fontSize: 11, fontWeight: 700, color: 'rgba(255,255,255,0.82)', letterSpacing: '-0.2px', lineHeight: 1.2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{value}</p>
@@ -4681,8 +4681,38 @@ export default function ReportDetail({ reportId, onBack, isPublic = false }: Rep
   );
 
   return (
-    <div className="flex h-full overflow-hidden" style={{ height: 'calc(100vh - 3.5rem)' }}>
-      <div className="hidden md:block" style={{ width: '60%', flexShrink: 0 }}>
+    <div className="flex flex-col md:flex-row overflow-hidden" style={{ height: 'calc(100vh - 3.5rem)' }}>
+      {/* Map — full width on mobile (250px tall), 60% on desktop */}
+      <div className="block" style={{ height: '250px', flexShrink: 0 }} data-mobile-map>
+        <div className="md:hidden w-full h-full">
+          <MapPanel
+            parcelBoundary={activeBoundary}
+            isBboxFallback={isBboxFallback}
+            boundarySource={boundarySource}
+            soilResults={soilResults}
+            lat={parcel?.lat ?? null}
+            lng={parcel?.lng ?? null}
+            onMapReady={(map) => {
+              mapRef.current = map;
+              console.log('MAP READY (mobile) — stored reference');
+            }}
+            onCoverageUpdate={handleCoverageUpdate}
+            onSoilPolygonsReady={setMapSoilPolygons}
+            onAllLayersReady={() => setMapLayersReady(true)}
+            onCanvasReady={(canvas) => { mapCanvasRef.current = canvas; }}
+            onBestZoneInFlood={setBestZoneInFloodWarning}
+            onPercFallback={(exhausted) => setPercFallbackWarning(exhausted ? 'exhausted' : 'expanded')}
+            onPercPinsReady={(pins) => { percPinsRef.current = pins; }}
+            onTokenReady={(token) => { mapboxTokenRef.current = token; }}
+            onSoilHover={setHudHover}
+            onSoilClick={(data) => {
+              setHudLocked(prev => prev?.mukey === data.mukey ? null : data);
+            }}
+            activeTab={activeTab}
+          />
+        </div>
+      </div>
+      <div className="hidden md:block" style={{ width: '60%', height: '100%', flexShrink: 0 }}>
         <MapPanel
           parcelBoundary={activeBoundary}
           isBboxFallback={isBboxFallback}
@@ -4721,8 +4751,11 @@ export default function ReportDetail({ reportId, onBack, isPublic = false }: Rep
           activeTab={activeTab}
         />
       </div>
-      <div className="bg-navy-800 border-l border-white/5 flex flex-col" style={{ width: '40%', minWidth: '320px', flexShrink: 0 }}>
-        {rightPanel}
+      {/* Right panel: on mobile full-width scrollable, on desktop fixed 40% */}
+      <div className="bg-navy-800 md:border-l border-t md:border-t-0 border-white/5 flex flex-col w-full md:w-auto md:flex-none overflow-y-auto" style={{ '--panel-w': '40%' } as React.CSSProperties}>
+        <div className="md:w-[40vw] md:min-w-[320px] md:h-full">
+          {rightPanel}
+        </div>
       </div>
     </div>
   );
