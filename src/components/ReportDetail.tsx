@@ -1300,6 +1300,7 @@ function MapPanel({ parcelBoundary, isBboxFallback, boundarySource, soilResults,
   const [zoneBadgeColors, setZoneBadgeColors] = useState<string[]>(['#22C55E', '#22C55E', '#22C55E']);
   const [layersOpen, setLayersOpen] = useState(false);
   const [terrain3D, setTerrain3D] = useState(false);
+  const initialCameraRef = useRef<{ zoom: number; center: mapboxgl.LngLatLike; bearing: number; pitch: number } | null>(null);
   const [soilReady, setSoilReady] = useState(false);
   const [femaReady, setFemaReady] = useState(false);
   const [nwiReady, setNwiReady] = useState(false);
@@ -2897,7 +2898,18 @@ function MapPanel({ parcelBoundary, isBboxFallback, boundarySource, soilResults,
       const canvas = mapRef.current?.getCanvas();
       if (canvas) onCanvasReadyRef.current?.(canvas);
     }, 800);
-    const id = setTimeout(() => setOverlayGone(true), timedOut ? 2420 : 420);
+    const id = setTimeout(() => {
+      setOverlayGone(true);
+      const map = mapRef.current;
+      if (map && !initialCameraRef.current) {
+        initialCameraRef.current = {
+          zoom: map.getZoom(),
+          center: map.getCenter(),
+          bearing: map.getBearing(),
+          pitch: map.getPitch(),
+        };
+      }
+    }, timedOut ? 2420 : 420);
     return () => clearTimeout(id);
   }, [allReady, timedOut]);
 
@@ -2986,7 +2998,15 @@ function MapPanel({ parcelBoundary, isBboxFallback, boundarySource, soilResults,
       } else {
         map.setTerrain(null);
         if (map.getLayer('sky')) map.removeLayer('sky');
-        map.easeTo({ pitch: 0, bearing: 0, duration: 800 });
+        const cam = initialCameraRef.current;
+        map.easeTo({
+          pitch: 0,
+          bearing: 0,
+          zoom: cam?.zoom ?? map.getZoom(),
+          center: cam?.center ?? map.getCenter(),
+          duration: 1200,
+          easing: (t) => t < 0.5 ? 2 * t * t : -1 + (4 - 2 * t) * t,
+        });
         setTerrain3D(false);
       }
     } catch (err) {
