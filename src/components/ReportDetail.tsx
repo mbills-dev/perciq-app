@@ -2048,15 +2048,9 @@ function MapPanel({ parcelBoundary, isBboxFallback, boundarySource, soilResults,
           soilName: String(p.muname ?? p.musym ?? `Soil unit ${p.mukey ?? ''}`),
         });
       });
-      // Use a map-level click handler that queries soil-fill directly.
-      // A layer-specific handler only fires when that layer is the topmost hit —
-      // overlay layers (flood, wetland, best-zone) rendered above soil-fill would
-      // otherwise silently absorb the click and prevent it from reaching soil-fill.
-      map.on('click', (e) => {
-        if (!map.getLayer('soil-fill')) return;
-        const features = map.queryRenderedFeatures(e.point, { layers: ['soil-fill'] });
-        if (!features.length) return;
-        const p = features[0].properties as Record<string, unknown>;
+      map.on('click', 'soil-fill', (e) => {
+        if (!e.features?.length) return;
+        const p = e.features[0].properties as Record<string, unknown>;
         const bucket = String(p.bucket ?? 'no-data');
         const hasScore = bucket !== 'no-data' && p.suitabilityScore != null && p.suitabilityScore !== 'null' && Number(p.suitabilityScore) > 0;
         onSoilClickRef.current?.({
@@ -3033,6 +3027,9 @@ function MapPanel({ parcelBoundary, isBboxFallback, boundarySource, soilResults,
         .zone-marker { transition: opacity 300ms ease; }
         .soil-tooltip .mapboxgl-popup-content { background: transparent !important; padding: 0 !important; box-shadow: 0 4px 20px rgba(0,0,0,0.5) !important; border-radius: 8px !important; }
         .soil-tooltip .mapboxgl-popup-tip { display: none !important; }
+        .mapboxgl-popup { pointer-events: none !important; }
+        .mapboxgl-popup-content { pointer-events: auto !important; }
+        .mapboxgl-popup-close-button { pointer-events: auto !important; }
       `}</style>
       <div ref={containerRef} className="w-full h-full" />
 
@@ -3456,6 +3453,7 @@ export default function ReportDetail({ reportId, onBack }: ReportDetailProps) {
 
     let best = 0;
     for (const poly of mapSoilPolygons) {
+      if (poly.bucket !== 'viable' && poly.bucket !== 'engineering-needed') continue;
       const s = (poly.geojson.properties as Record<string, unknown>)?.suitabilityScore as number ?? 0;
       if (s > best) best = s;
     }
