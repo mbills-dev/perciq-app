@@ -1988,18 +1988,18 @@ function MapPanel({ parcelBoundary, isBboxFallback, boundarySource, soilResults,
     bestZones.forEach((zone, i) => {
       const isPrimary = zone.label === 'Primary';
       const srcId = `best-zone-${i}`;
+      const zoneColor = zone.bucket === 'engineering-needed' ? '#F59E0B' : zone.bucket === 'not-suitable' ? '#EF4444' : '#22C55E';
+      const zoneGlow  = zone.bucket === 'engineering-needed' ? '#F59E0B' : zone.bucket === 'not-suitable' ? '#EF4444' : '#30D158';
       try {
         map.addSource(srcId, { type: 'geojson', data: zone.geojson as mapboxgl.GeoJSONSourceSpecification['data'] });
-        map.addLayer({ id: `${srcId}-fill`, type: 'fill', source: srcId, paint: { 'fill-color': '#22C55E', 'fill-opacity': 0.55 }, layout: { visibility: vis } }, beforeParcel);
+        map.addLayer({ id: `${srcId}-fill`, type: 'fill', source: srcId, paint: { 'fill-color': zoneColor, 'fill-opacity': 0.55 }, layout: { visibility: vis } }, beforeParcel);
         if (isPrimary) {
-          // Static soft glow behind solid outline
-          map.addLayer({ id: `${srcId}-glow`, type: 'line', source: srcId, paint: { 'line-color': '#30D158', 'line-width': 6, 'line-opacity': 0.2, 'line-blur': 3 }, layout: { visibility: vis } }, beforeParcel);
-          map.addLayer({ id: `${srcId}-outline`, type: 'line', source: srcId, paint: { 'line-color': '#30D158', 'line-width': 2.5, 'line-opacity': 1.0 }, layout: { visibility: vis } }, beforeParcel);
+          map.addLayer({ id: `${srcId}-glow`, type: 'line', source: srcId, paint: { 'line-color': zoneGlow, 'line-width': 6, 'line-opacity': 0.2, 'line-blur': 3 }, layout: { visibility: vis } }, beforeParcel);
+          map.addLayer({ id: `${srcId}-outline`, type: 'line', source: srcId, paint: { 'line-color': zoneGlow, 'line-width': 2.5, 'line-opacity': 1.0 }, layout: { visibility: vis } }, beforeParcel);
           overlayIds.push(`${srcId}-fill`, `${srcId}-glow`, `${srcId}-outline`, srcId);
         } else {
-          // Secondary: same solid outline style as primary, slightly thinner
-          map.addLayer({ id: `${srcId}-glow`, type: 'line', source: srcId, paint: { 'line-color': '#30D158', 'line-width': 6, 'line-opacity': 0.2, 'line-blur': 3 }, layout: { visibility: vis } }, beforeParcel);
-          map.addLayer({ id: `${srcId}-outline`, type: 'line', source: srcId, paint: { 'line-color': '#30D158', 'line-width': 2.5, 'line-opacity': 1.0 }, layout: { visibility: vis } }, beforeParcel);
+          map.addLayer({ id: `${srcId}-glow`, type: 'line', source: srcId, paint: { 'line-color': zoneGlow, 'line-width': 6, 'line-opacity': 0.2, 'line-blur': 3 }, layout: { visibility: vis } }, beforeParcel);
+          map.addLayer({ id: `${srcId}-outline`, type: 'line', source: srcId, paint: { 'line-color': zoneGlow, 'line-width': 2.5, 'line-opacity': 1.0 }, layout: { visibility: vis } }, beforeParcel);
           overlayIds.push(`${srcId}-fill`, `${srcId}-glow`, `${srcId}-outline`, srcId);
         }
       } catch { /* ignore */ }
@@ -2048,9 +2048,15 @@ function MapPanel({ parcelBoundary, isBboxFallback, boundarySource, soilResults,
           soilName: String(p.muname ?? p.musym ?? `Soil unit ${p.mukey ?? ''}`),
         });
       });
-      map.on('click', 'soil-fill', (e) => {
-        if (!e.features?.length) return;
-        const p = e.features[0].properties as Record<string, unknown>;
+      // Use a map-level click handler that queries soil-fill directly.
+      // A layer-specific handler only fires when that layer is the topmost hit —
+      // overlay layers (flood, wetland, best-zone) rendered above soil-fill would
+      // otherwise silently absorb the click and prevent it from reaching soil-fill.
+      map.on('click', (e) => {
+        if (!map.getLayer('soil-fill')) return;
+        const features = map.queryRenderedFeatures(e.point, { layers: ['soil-fill'] });
+        if (!features.length) return;
+        const p = features[0].properties as Record<string, unknown>;
         const bucket = String(p.bucket ?? 'no-data');
         const hasScore = bucket !== 'no-data' && p.suitabilityScore != null && p.suitabilityScore !== 'null' && Number(p.suitabilityScore) > 0;
         onSoilClickRef.current?.({
@@ -3846,11 +3852,13 @@ export default function ReportDetail({ reportId, onBack }: ReportDetailProps) {
     const convScore = report?.conventional_score ?? scoreResult?.conventional_score ?? null;
     if (convScore === null) return { zoneScore: null, parcelScore: null };
 
-    // Best zone score: highest client-side finalScore from the scored soil polygons.
+    // Best zone score: highest finalScore among viable/engineering-needed polygons only
+    // (mirrors computeBestZones candidate filter — must not pick not-suitable polygons)
     let zoneScore: number | null = null;
     if (mapSoilPolygons.length > 0) {
       let best = 0;
       for (const poly of mapSoilPolygons) {
+        if (poly.bucket !== 'viable' && poly.bucket !== 'engineering-needed') continue;
         const s = (poly.geojson.properties as Record<string, unknown>)?.suitabilityScore as number ?? 0;
         if (s > best) best = s;
       }
