@@ -1286,6 +1286,7 @@ function MapPanel({ parcelBoundary, isBboxFallback, boundarySource, soilResults,
   const percMarkersRef = useRef<mapboxgl.Marker[]>([]);
   const noZoneBadgeRef = useRef<mapboxgl.Marker | null>(null);
   const soilPopupRef = useRef<mapboxgl.Popup | null>(null);
+  const soilClickRegisteredRef = useRef(false);
   const [mapError, setMapError] = useState('');
   const [sdaError, setSdaError] = useState(false);
   const [sdaRetrying, setSdaRetrying] = useState(false);
@@ -2020,8 +2021,9 @@ function MapPanel({ parcelBoundary, isBboxFallback, boundarySource, soilResults,
       return;
     }
 
-    // Soil click/hover — wired to the single soil-fill layer
-    try {
+    // Soil click/hover — wired to the single soil-fill layer (register only once per map instance)
+    if (!soilClickRegisteredRef.current) try {
+      soilClickRegisteredRef.current = true;
       console.log('[click] registering soil zone click handler on layer:', 'soil-fill');
       map.on('mouseenter', 'soil-fill', () => { map.getCanvas().style.cursor = 'pointer'; });
       map.on('mouseleave', 'soil-fill', () => {
@@ -2071,7 +2073,7 @@ function MapPanel({ parcelBoundary, isBboxFallback, boundarySource, soilResults,
           soilName: String(p.muname ?? p.musym ?? `Soil unit ${p.mukey ?? ''}`),
         });
       });
-    } catch { /* ignore interaction setup errors */ }
+    } catch { /* ignore interaction setup errors */ } // end soil click/hover registration
 
     // Zone markers + perc pins
     zoneMarkersRef.current.forEach(m => m.remove());
@@ -2726,6 +2728,7 @@ function MapPanel({ parcelBoundary, isBboxFallback, boundarySource, soilResults,
       noZoneBadgeRef.current = null;
       markerRef.current?.remove();
       safeRemovePopup(soilPopupRef.current);
+      soilClickRegisteredRef.current = false;
       map.remove();
       mapRef.current = null;
     };
@@ -3855,13 +3858,16 @@ export default function ReportDetail({ reportId, onBack }: ReportDetailProps) {
     const convScore = report?.conventional_score ?? scoreResult?.conventional_score ?? null;
     if (convScore === null) return { zoneScore: null, parcelScore: null };
 
-    // Best zone score: highest finalScore among viable/engineering-needed polygons only
-    // (mirrors computeBestZones candidate filter — must not pick not-suitable polygons)
+    // Best zone score: highest finalScore among viable/engineering-needed polygons only,
+    // applying the same MIN_ZONE_AREA_SQM filter that computeBestZones uses so the
+    // displayed score matches the zone actually selected as Primary.
+    const MIN_ZONE_AREA_SQM = 1000;
     let zoneScore: number | null = null;
     if (mapSoilPolygons.length > 0) {
       let best = 0;
       for (const poly of mapSoilPolygons) {
         if (poly.bucket !== 'viable' && poly.bucket !== 'engineering-needed') continue;
+        try { if (turf.area(poly.geojson) < MIN_ZONE_AREA_SQM) continue; } catch { continue; }
         const s = (poly.geojson.properties as Record<string, unknown>)?.suitabilityScore as number ?? 0;
         if (s > best) best = s;
       }
