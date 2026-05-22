@@ -2022,6 +2022,7 @@ function MapPanel({ parcelBoundary, isBboxFallback, boundarySource, soilResults,
 
     // Soil click/hover — wired to the single soil-fill layer
     try {
+      console.log('[click] registering soil zone click handler on layer:', 'soil-fill');
       map.on('mouseenter', 'soil-fill', () => { map.getCanvas().style.cursor = 'pointer'; });
       map.on('mouseleave', 'soil-fill', () => {
         map.getCanvas().style.cursor = '';
@@ -2049,6 +2050,7 @@ function MapPanel({ parcelBoundary, isBboxFallback, boundarySource, soilResults,
         });
       });
       map.on('click', 'soil-fill', (e) => {
+        console.log('[click] soil zone clicked:', e.features);
         if (!e.features?.length) return;
         const p = e.features[0].properties as Record<string, unknown>;
         const bucket = String(p.bucket ?? 'no-data');
@@ -3451,9 +3453,12 @@ export default function ReportDetail({ reportId, onBack }: ReportDetailProps) {
   useEffect(() => {
     if (!mapLayersReady || mapSoilPolygons.length === 0 || scoreWrittenRef.current) return;
 
+    // Mirror computeBestZones candidate filter exactly: viable/engineering-needed, area >= 1000 sqm
+    const MIN_ZONE_AREA_SQM = 1000;
     let best = 0;
     for (const poly of mapSoilPolygons) {
       if (poly.bucket !== 'viable' && poly.bucket !== 'engineering-needed') continue;
+      try { if (turf.area(poly.geojson) < MIN_ZONE_AREA_SQM) continue; } catch { continue; }
       const s = (poly.geojson.properties as Record<string, unknown>)?.suitabilityScore as number ?? 0;
       if (s > best) best = s;
     }
