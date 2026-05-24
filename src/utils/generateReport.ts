@@ -430,12 +430,8 @@ body{
   display:flex;justify-content:space-between;align-items:center;
   border-bottom:1px solid var(--rule);
 }
-.wm{display:flex;align-items:center;gap:9px}
-.wm-box{
-  width:28px;height:28px;background:var(--g);
-  border-radius:7px;display:flex;align-items:center;justify-content:center;
-}
-.wm-box svg{width:13px;height:13px;fill:none;stroke:#fff;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
+.wm{display:flex;align-items:center;gap:7px}
+.wm-box{display:flex;align-items:center;justify-content:center}
 .wm-name{font-size:15px;font-weight:900;letter-spacing:-0.03em;color:var(--ink)}
 .cov-doc{font-size:15px;font-weight:400;color:var(--slate);letter-spacing:0.03em}
 
@@ -552,8 +548,6 @@ body{
 .pg-title{font-size:22px;font-weight:900;letter-spacing:-0.03em;color:var(--ink)}
 .pg-hdr-r{display:flex;flex-direction:column;align-items:flex-end;gap:3px;padding-top:2px}
 .pg-wm{display:flex;align-items:center;gap:6px}
-.pg-wm-box{width:17px;height:17px;background:var(--g);border-radius:4px;display:flex;align-items:center;justify-content:center}
-.pg-wm-box svg{width:8px;height:8px;fill:none;stroke:#fff;stroke-width:2;stroke-linecap:round}
 .pg-wm-name{font-size:15px;font-weight:900;letter-spacing:-0.02em;color:var(--ink)}
 .pg-prop{font-size:14px;font-weight:400;color:var(--slate)}
 .pg-rule{height:1px;background:var(--rule);margin:16px 52px 0;flex-shrink:0}
@@ -912,8 +906,8 @@ export function generateReportHTML(data: ReportData, meta?: { shareUrl?: string;
 
   <div class="cov-nav">
     <div class="wm">
-      <div class="wm-box"><svg viewBox="0 0 14 14"><circle cx="7" cy="7" r="2.5"/><line x1="7" y1="1" x2="7" y2="3.5"/><line x1="7" y1="10.5" x2="7" y2="13"/><line x1="1" y1="7" x2="3.5" y2="7"/><line x1="10.5" y1="7" x2="13" y2="7"/></svg></div>
-      <span class="wm-name">PercIQ</span>
+      <div class="wm-box"><svg viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg" width="28" height="28"><defs><filter id="pg-glow" x="-50%" y="-50%" width="200%" height="200%"><feGaussianBlur stdDeviation="2.25" result="blur"/><feColorMatrix type="matrix" values="0 0 0 0 0.129 0 0 0 0 0.773 0 0 0 0 0.369 0 0 0 0.3 0" result="colBlur"/><feMerge><feMergeNode in="colBlur"/><feMergeNode in="SourceGraphic"/></feMerge></filter></defs><g stroke="#21C55E" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" fill="none" filter="url(#pg-glow)"><path d="M 26 59 L 50 69 L 74 59"/><path d="M 26 48 L 50 58 L 74 48"/><polygon points="50,27 74,37 50,47 26,37" fill="none"/></g></svg></div>
+      <span class="wm-name">PERC<span style="color:var(--g);font-weight:300">IQ</span></span>
     </div>
     <span class="cov-doc">Soil Suitability Report &nbsp;\u00b7&nbsp; Confidential</span>
   </div>
@@ -1014,7 +1008,7 @@ export function generateReportHTML(data: ReportData, meta?: { shareUrl?: string;
   <div class="pg-hdr">
     <div><div class="pg-sec">Section 01</div><h2 class="pg-title">Soil Zone Breakdown</h2></div>
     <div class="pg-hdr-r">
-      <div class="pg-wm"><div class="pg-wm-box"><svg viewBox="0 0 10 10"><circle cx="5" cy="5" r="2"/><line x1="5" y1="1" x2="5" y2="2.5"/><line x1="5" y1="7.5" x2="5" y2="9"/><line x1="1" y1="5" x2="2.5" y2="5"/><line x1="7.5" y1="5" x2="9" y2="5"/></svg></div><span class="pg-wm-name">PercIQ</span></div>
+      <div class="pg-wm"><svg viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg" width="20" height="20"><defs><filter id="ph-glow" x="-50%" y="-50%" width="200%" height="200%"><feGaussianBlur stdDeviation="2.25" result="blur"/><feColorMatrix type="matrix" values="0 0 0 0 0.129 0 0 0 0 0.773 0 0 0 0 0.369 0 0 0 0.3 0" result="colBlur"/><feMerge><feMergeNode in="colBlur"/><feMergeNode in="SourceGraphic"/></feMerge></filter></defs><g stroke="#21C55E" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" fill="none" filter="url(#ph-glow)"><path d="M 26 59 L 50 69 L 74 59"/><path d="M 26 48 L 50 58 L 74 48"/><polygon points="50,27 74,37 50,47 26,37" fill="none"/></g></svg><span class="pg-wm-name">PERC<span style="color:var(--g);font-weight:300">IQ</span></span></div>
       <div class="pg-prop">${data.address} \u00b7 ${data.county}, ${data.state}</div>
     </div>
   </div>
@@ -1042,7 +1036,7 @@ export function generateReportHTML(data: ReportData, meta?: { shareUrl?: string;
   <div class="pg-hdr">
     <div><div class="pg-sec">Section 02</div><h2 class="pg-title">Site Risk Summary</h2></div>
     <div class="pg-hdr-r">
-      <div class="pg-wm"><div class="pg-wm-box"><svg viewBox="0 0 10 10"><circle cx="5" cy="5" r="2"/><line x1="5" y1="1" x2="5" y2="2.5"/><line x1="5" y1="7.5" x2="5" y2="9"/><line x1="1" y1="5" x2="2.5" y2="5"/><line x1="7.5" y1="5" x2="9" y2="5"/></svg></div><span class="pg-wm-name">PercIQ</span></div>
+      <div class="pg-wm"><svg viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg" width="20" height="20"><defs><filter id="ph-glow" x="-50%" y="-50%" width="200%" height="200%"><feGaussianBlur stdDeviation="2.25" result="blur"/><feColorMatrix type="matrix" values="0 0 0 0 0.129 0 0 0 0 0.773 0 0 0 0 0.369 0 0 0 0.3 0" result="colBlur"/><feMerge><feMergeNode in="colBlur"/><feMergeNode in="SourceGraphic"/></feMerge></filter></defs><g stroke="#21C55E" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" fill="none" filter="url(#ph-glow)"><path d="M 26 59 L 50 69 L 74 59"/><path d="M 26 48 L 50 58 L 74 48"/><polygon points="50,27 74,37 50,47 26,37" fill="none"/></g></svg><span class="pg-wm-name">PERC<span style="color:var(--g);font-weight:300">IQ</span></span></div>
       <div class="pg-prop">${data.address} \u00b7 ${data.county}, ${data.state}</div>
     </div>
   </div>
@@ -1099,7 +1093,7 @@ export function generateReportHTML(data: ReportData, meta?: { shareUrl?: string;
   <div class="pg-hdr">
     <div><div class="pg-sec">Section 03</div><h2 class="pg-title">Recommended Test Sites</h2></div>
     <div class="pg-hdr-r">
-      <div class="pg-wm"><div class="pg-wm-box"><svg viewBox="0 0 10 10"><circle cx="5" cy="5" r="2"/><line x1="5" y1="1" x2="5" y2="2.5"/><line x1="5" y1="7.5" x2="5" y2="9"/><line x1="1" y1="5" x2="2.5" y2="5"/><line x1="7.5" y1="5" x2="9" y2="5"/></svg></div><span class="pg-wm-name">PercIQ</span></div>
+      <div class="pg-wm"><svg viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg" width="20" height="20"><defs><filter id="ph-glow" x="-50%" y="-50%" width="200%" height="200%"><feGaussianBlur stdDeviation="2.25" result="blur"/><feColorMatrix type="matrix" values="0 0 0 0 0.129 0 0 0 0 0.773 0 0 0 0 0.369 0 0 0 0.3 0" result="colBlur"/><feMerge><feMergeNode in="colBlur"/><feMergeNode in="SourceGraphic"/></feMerge></filter></defs><g stroke="#21C55E" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" fill="none" filter="url(#ph-glow)"><path d="M 26 59 L 50 69 L 74 59"/><path d="M 26 48 L 50 58 L 74 48"/><polygon points="50,27 74,37 50,47 26,37" fill="none"/></g></svg><span class="pg-wm-name">PERC<span style="color:var(--g);font-weight:300">IQ</span></span></div>
       <div class="pg-prop">${data.address} \u00b7 ${data.county}, ${data.state}</div>
     </div>
   </div>
