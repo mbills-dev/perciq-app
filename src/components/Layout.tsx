@@ -72,7 +72,8 @@ export default function Layout({ children, currentPage, onNavigate, userEmail, f
           onClick={() => onNavigate('dashboard')}
           className="flex items-center hover:opacity-80 transition-opacity"
         >
-          <img src="/perciq-logo-wordmark-inline-dark_(1).svg" alt="PercIQ" className="h-11 w-auto" />
+          <img src="/perciq-logo-mark-dark.svg" alt="" className="h-10 w-auto" />
+          <span className="text-[1.35rem] font-extrabold tracking-tight text-white leading-none">PERC<span className="text-[#21C55E] font-light">IQ</span></span>
         </button>
 
         {/* Page label — only when not on dashboard */}
