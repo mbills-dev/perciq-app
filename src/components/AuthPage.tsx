@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { supabase } from '../lib/supabase';
-import { Layers, Mail, Lock, ArrowRight, AlertCircle } from 'lucide-react';
+import { Mail, Lock, ArrowRight, AlertCircle } from 'lucide-react';
 
 export default function AuthPage() {
   const [mode, setMode] = useState<'login' | 'signup'>('login');
@@ -38,12 +38,10 @@ export default function AuthPage() {
         {/* Logo */}
         <div className="text-center mb-8">
           <div className="inline-flex items-center gap-3 mb-4">
-            <div className="w-10 h-10 bg-primary-500/20 border border-primary-500/40 rounded-xl flex items-center justify-center">
-              <Layers className="w-5 h-5 text-primary-400" />
-            </div>
-            <span className="text-2xl font-bold tracking-tight">PercIQ</span>
+            <img src="/perciq-logo-mark-dark.svg" alt="" className="h-10 w-auto" />
+            <span className="text-2xl font-extrabold tracking-tight text-white">PERC<span className="text-[#21C55E] font-light">IQ</span></span>
           </div>
-          <p className="text-white/50 text-sm">Soil Suitability Intelligence for Land Investors</p>
+          <p className="text-white/50 text-sm">Soil intelligence for land professionals</p>
         </div>
 
         {/* Card */}
@@ -128,7 +126,7 @@ export default function AuthPage() {
         </div>
 
         <p className="text-center text-xs text-white/20 mt-6">
-          Powered by SSURGO / NRCS Soil Data
+          Data powered soil intelligence
         </p>
       </div>
     </div>
