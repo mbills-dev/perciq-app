@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { supabase } from '../lib/supabase';
 import {
-  Layers, LogOut,
+  LogOut,
   Bell, User, CreditCard, Building2, ChevronDown,
 } from 'lucide-react';
 
@@ -70,12 +70,9 @@ export default function Layout({ children, currentPage, onNavigate, userEmail, f
         {/* Brand — click to go to dashboard */}
         <button
           onClick={() => onNavigate('dashboard')}
-          className="flex items-center gap-2.5 hover:opacity-80 transition-opacity"
+          className="flex items-center hover:opacity-80 transition-opacity"
         >
-          <div className="w-7 h-7 bg-primary-500/20 border border-primary-500/40 rounded-lg flex items-center justify-center">
-            <Layers className="w-3.5 h-3.5 text-primary-400" />
-          </div>
-          <span className="font-bold text-sm tracking-tight text-white">PercIQ</span>
+          <img src="/perciq-logo-wordmark-inline-dark_(1).svg" alt="PercIQ" className="h-7 w-auto" />
         </button>
 
         {/* Page label — only when not on dashboard */}
