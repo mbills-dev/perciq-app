@@ -1,0 +1,22 @@
+<svg width="284" height="76" viewBox="0 0 284 76" xmlns="http://www.w3.org/2000/svg" style="font-family: 'Inter', sans-serif;">
+  <svg x="12" y="12" width="52" height="52" viewBox="0 0 100 100">
+    
+  <defs>
+    <filter id="perciq-glow-export-1.5-21C55E" x="-50%" y="-50%" width="200%" height="200%">
+      <feGaussianBlur stdDeviation="2.25" result="blur" />
+      <feColorMatrix type="matrix" values="0 0 0 0 0.12941176470588237 0 0 0 0 0.7725490196078432 0 0 0 0 0.3686274509803922 0 0 0 0.30000000000000004 0" result="colBlur" />
+      <feMerge>
+        <feMergeNode in="colBlur" />
+        <feMergeNode in="SourceGraphic" />
+      </feMerge>
+    </filter>
+  </defs>
+  
+  <g stroke="#21C55E" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" fill="none" filter="url(#perciq-glow-export-1.5-21C55E)">
+    <path d="M 26 59 L 50 69 L 74 59" />
+    <path d="M 26 48 L 50 58 L 74 48" />
+    <polygon points="50,27 74,37 50,47 26,37" fill="none" />
+  </g>
+  </svg>
+  <text x="80" y="49.9" font-size="34" fill="#FFFFFF" font-weight="800" letter-spacing="0">PERC<tspan fill="#21C55E" font-weight="300">IQ</tspan></text>
+</svg>
