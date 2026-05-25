@@ -4461,7 +4461,7 @@ export default function ReportDetail({ reportId, onBack, isPublic = false }: Rep
                   gap: 4,
                 }}>
                   <p style={{ fontSize: 8, textTransform: 'uppercase', letterSpacing: '0.7px', color: 'rgba(255,255,255,0.30)', lineHeight: 1 }}>
-                    Score
+                    SI Score
                   </p>
                   <span
                     key={hudData.mukey}
