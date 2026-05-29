@@ -181,7 +181,10 @@ export default function SettingsPage({ user }: Props) {
   }
 
   useEffect(() => {
-    if (tab === 'billing') loadStripeData();
+    if (tab === 'billing') {
+      setStripeLoaded(false);
+      loadStripeData();
+    }
   }, [tab]);
 
   async function upsertProfile(fields: Partial<UserProfile>) {
@@ -446,13 +449,24 @@ export default function SettingsPage({ user }: Props) {
             <p className="text-xs text-white/35 mb-5">Your plan and usage for this billing period</p>
 
             {!stripeLoaded ? (
-              <div className="space-y-3 py-2">
-                {[1, 2, 3].map(i => (
-                  <div key={i} className="flex items-center justify-between py-3 border-b border-white/5">
-                    <div className="h-3 w-20 bg-white/8 rounded animate-pulse" />
-                    <div className="h-3 w-24 bg-white/8 rounded animate-pulse" />
-                  </div>
-                ))}
+              <div>
+                <div className="space-y-0 mb-5">
+                  {[
+                    { left: 'w-12', right: 'w-16' },
+                    { left: 'w-8',  right: 'w-20' },
+                    { left: 'w-20', right: 'w-24' },
+                    { left: 'w-28', right: 'w-14' },
+                  ].map((widths, i) => (
+                    <div key={i} className="flex items-center justify-between py-3.5 border-b border-white/5">
+                      <div className={`h-2.5 ${widths.left} bg-white/8 rounded-full animate-pulse`} />
+                      <div className={`h-2.5 ${widths.right} bg-white/8 rounded-full animate-pulse`} style={{ animationDelay: `${i * 80}ms` }} />
+                    </div>
+                  ))}
+                </div>
+                <div className="flex gap-3">
+                  <div className="flex-1 h-10 bg-white/5 border border-white/8 rounded-xl animate-pulse" />
+                  <div className="w-32 h-10 bg-primary-500/8 border border-primary-500/15 rounded-xl animate-pulse" />
+                </div>
               </div>
             ) : isPaid ? (
               <>
