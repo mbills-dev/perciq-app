@@ -85,6 +85,7 @@ const PLANS: PricingPlan[] = [
 
 interface Props {
   user: User;
+  initialTab?: Tab;
 }
 
 async function callEdgeFunction(slug: string, body: unknown, token: string) {
@@ -100,8 +101,8 @@ async function callEdgeFunction(slug: string, body: unknown, token: string) {
   return res.json();
 }
 
-export default function SettingsPage({ user }: Props) {
-  const [tab, setTab] = useState<Tab>('profile');
+export default function SettingsPage({ user, initialTab }: Props) {
+  const [tab, setTab] = useState<Tab>(initialTab ?? 'profile');
   const [billingView, setBillingView] = useState<BillingView>('overview');
   const [profile, setProfile] = useState<UserProfile | null>(null);
   const [loading, setLoading] = useState(true);

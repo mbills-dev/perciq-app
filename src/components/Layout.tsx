@@ -6,11 +6,12 @@ import {
 } from 'lucide-react';
 
 type Page = 'dashboard' | 'settings';
+type SettingsTab = 'profile' | 'billing';
 
 interface LayoutProps {
   children: React.ReactNode;
   currentPage: Page;
-  onNavigate: (page: Page) => void;
+  onNavigate: (page: Page, tab?: SettingsTab) => void;
   userEmail: string;
   fullHeight?: boolean;
 }
@@ -170,7 +171,7 @@ export default function Layout({ children, currentPage, onNavigate, userEmail, f
                   Profile Settings
                 </button>
                 <button
-                  onClick={() => { onNavigate('settings'); setMenuOpen(false); }}
+                  onClick={() => { onNavigate('settings', 'billing'); setMenuOpen(false); }}
                   className="w-full flex items-center gap-3 px-4 py-2.5 text-sm text-white/60 hover:text-white hover:bg-white/5 transition-all"
                 >
                   <CreditCard className="w-4 h-4" />

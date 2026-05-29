@@ -15,6 +15,7 @@ function getPublicReportId(): string | null {
 }
 
 type Page = 'dashboard' | 'settings';
+type SettingsTab = 'profile' | 'billing';
 
 function getReportIdFromUrl(): string | null {
   const params = new URLSearchParams(window.location.search);
@@ -35,6 +36,7 @@ function AuthenticatedApp() {
   const [user, setUser] = useState<User | null>(null);
   const [authLoading, setAuthLoading] = useState(true);
   const [currentPage, setCurrentPage] = useState<Page>('dashboard');
+  const [settingsTab, setSettingsTab] = useState<SettingsTab>('profile');
   const [viewingReportId, setViewingReportId] = useState<string | null>(getReportIdFromUrl);
 
   useEffect(() => {
@@ -48,8 +50,9 @@ function AuthenticatedApp() {
     });
   }, []);
 
-  function handleNavigate(page: Page) {
+  function handleNavigate(page: Page, tab?: SettingsTab) {
     setCurrentPage(page);
+    if (tab) setSettingsTab(tab);
     setViewingReportId(null);
     setReportIdInUrl(null);
   }
@@ -174,7 +177,7 @@ function AuthenticatedApp() {
         />
       )}
       {currentPage === 'settings' && (
-        <SettingsPage user={user} />
+        <SettingsPage user={user} initialTab={settingsTab} />
       )}
     </Layout>
   );
