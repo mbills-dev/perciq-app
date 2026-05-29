@@ -111,6 +111,7 @@ export default function SettingsPage({ user }: Props) {
   const [toast, setToast] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
   const [stripeData, setStripeData] = useState<StripeData | null>(null);
   const [stripeLoading, setStripeLoading] = useState(false);
+  const [stripeLoaded, setStripeLoaded] = useState(false);
   const [portalLoading, setPortalLoading] = useState(false);
   const [checkoutLoading, setCheckoutLoading] = useState<string | null>(null);
   const [billingInterval, setBillingInterval] = useState<'monthly' | 'annual'>('monthly');
@@ -175,6 +176,7 @@ export default function SettingsPage({ user }: Props) {
       // silently fail — local profile data still shows
     } finally {
       setStripeLoading(false);
+      setStripeLoaded(true);
     }
   }
 
@@ -443,7 +445,16 @@ export default function SettingsPage({ user }: Props) {
             </div>
             <p className="text-xs text-white/35 mb-5">Your plan and usage for this billing period</p>
 
-            {isPaid ? (
+            {!stripeLoaded ? (
+              <div className="space-y-3 py-2">
+                {[1, 2, 3].map(i => (
+                  <div key={i} className="flex items-center justify-between py-3 border-b border-white/5">
+                    <div className="h-3 w-20 bg-white/8 rounded animate-pulse" />
+                    <div className="h-3 w-24 bg-white/8 rounded animate-pulse" />
+                  </div>
+                ))}
+              </div>
+            ) : isPaid ? (
               <>
                 <div className="space-y-0 mb-5">
                   <div className="flex items-center justify-between py-3 border-b border-white/5">

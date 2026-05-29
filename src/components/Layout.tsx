@@ -24,8 +24,12 @@ export default function Layout({ children, currentPage, onNavigate, userEmail, f
   const menuRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
+    let channel: ReturnType<typeof supabase.channel> | null = null;
+
     supabase.auth.getUser().then(({ data: { user } }) => {
       if (!user) return;
+
+      // Initial load
       supabase
         .from('user_profiles')
         .select('first_name, last_name, organization, plan')
@@ -39,7 +43,27 @@ export default function Layout({ children, currentPage, onNavigate, userEmail, f
             setPlan(data.plan ?? '');
           }
         });
+
+      // Realtime subscription so plan badge updates immediately when webhook fires
+      channel = supabase
+        .channel('layout-profile')
+        .on(
+          'postgres_changes',
+          { event: 'UPDATE', schema: 'public', table: 'user_profiles', filter: `id=eq.${user.id}` },
+          (payload) => {
+            const row = payload.new as { first_name?: string; last_name?: string; organization?: string; plan?: string };
+            if (row.first_name !== undefined) setFirstName(row.first_name ?? '');
+            if (row.last_name !== undefined) setLastName(row.last_name ?? '');
+            if (row.organization !== undefined) setOrganization(row.organization ?? '');
+            if (row.plan !== undefined) setPlan(row.plan ?? '');
+          }
+        )
+        .subscribe();
     });
+
+    return () => {
+      if (channel) supabase.removeChannel(channel);
+    };
   }, []);
 
   useEffect(() => {
