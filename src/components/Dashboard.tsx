@@ -1133,10 +1133,9 @@ export default function Dashboard({ onViewReport, onCreateReport, onNavigateSett
             // Increment usage counter
             const { data: { user } } = await supabase.auth.getUser();
             if (user) {
-              await supabase.from('user_profiles').upsert({
-                id: user.id,
-                monthly_analyses_used: analysesUsed + 1,
-              }, { onConflict: 'id' });
+              await supabase.from('user_profiles')
+                .update({ monthly_analyses_used: analysesUsed + 1 })
+                .eq('id', user.id);
               setAnalysesUsed(prev => prev + 1);
             }
             loadData();

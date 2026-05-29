@@ -82,21 +82,23 @@ Deno.serve(async (req: Request) => {
       });
     }
 
-    const priceId = sub.items.data[0]?.price.id ?? "";
-    let plan = "free";
-    if (priceId.includes("starter")) plan = "starter";
-    else if (priceId.includes("pro")) plan = "pro";
-    else if (priceId.includes("unlimited")) plan = "unlimited";
+    const PRICE_TO_PLAN: Record<string, string> = {
+      "price_1TcSpr4HNibJp1qsMmG5ILVz": "starter",
+      "price_1TcSps4HNibJp1qskQtKARUe": "starter",
+      "price_1TcSps4HNibJp1qsU8qaDGwL": "pro",
+      "price_1TcSps4HNibJp1qsoxLHOmAd": "pro",
+      "price_1TcSps4HNibJp1qsO3cmZUZS": "unlimited",
+      "price_1TcSpr4HNibJp1qsdQ7YHMco": "unlimited",
+    };
 
+    const priceId = sub.items.data[0]?.price.id ?? "";
+    const plan = PRICE_TO_PLAN[priceId] ?? "free";
     const renewalDate = new Date(sub.current_period_end * 1000).toISOString().split("T")[0];
 
-    // Sync back to Supabase
-    await supabase.from("user_profiles").upsert({
-      id: user.id,
-      plan,
-      subscription_status: sub.status,
-      plan_renewal_date: renewalDate,
-    }, { onConflict: "id" });
+    // Sync back to Supabase — use update to avoid clobbering other fields
+    await supabase.from("user_profiles")
+      .update({ plan, subscription_status: sub.status, plan_renewal_date: renewalDate })
+      .eq("id", user.id);
 
     return new Response(JSON.stringify({
       plan,
