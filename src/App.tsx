@@ -170,6 +170,7 @@ function AuthenticatedApp() {
         <Dashboard
           onViewReport={handleViewReport}
           onCreateReport={handleCreateReport}
+          onNavigateSettings={() => handleNavigate('settings')}
         />
       )}
       {currentPage === 'settings' && (

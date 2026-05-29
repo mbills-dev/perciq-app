@@ -1,15 +1,17 @@
 import { useEffect, useState, useRef } from 'react';
 import { supabase } from '../lib/supabase';
-import type { Parcel, Report } from '../types/database';
+import type { Parcel, Report, PlanTier } from '../types/database';
+import { PLAN_LIMITS } from '../types/database';
 import {
   Plus, Search, Trash2, Pencil, Map as MapIcon, ChevronDown, ChevronUp,
-  AlertCircle, Loader2, ArrowRight, X, CheckCircle2,
+  AlertCircle, Loader2, ArrowRight, X, CheckCircle2, Zap,
 } from 'lucide-react';
 import CountyAutocomplete from './CountyAutocomplete';
 
 interface DashboardProps {
   onViewReport: (reportId: string) => void;
   onCreateReport: (parcelId: string) => void;
+  onNavigateSettings?: () => void;
 }
 
 // ─── Score helpers ────────────────────────────────────────────────────────────
@@ -698,7 +700,7 @@ function AddParcelModal({
 
 // ─── Main Dashboard ───────────────────────────────────────────────────────────
 
-export default function Dashboard({ onViewReport, onCreateReport }: DashboardProps) {
+export default function Dashboard({ onViewReport, onCreateReport, onNavigateSettings }: DashboardProps) {
   const [rows, setRows] = useState<ParcelRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
@@ -707,8 +709,11 @@ export default function Dashboard({ onViewReport, onCreateReport }: DashboardPro
   const [deleteId, setDeleteId] = useState<string | null>(null);
   const [editId, setEditId] = useState<string | null>(null);
   const [showModal, setShowModal] = useState(false);
+  const [showLimitModal, setShowLimitModal] = useState(false);
+  const [userPlan, setUserPlan] = useState<PlanTier>('free');
+  const [analysesUsed, setAnalysesUsed] = useState(0);
 
-  useEffect(() => { loadData(); }, []);
+  useEffect(() => { loadData(); loadUsage(); }, []);
 
   async function loadData() {
     setLoading(true);
@@ -737,6 +742,35 @@ export default function Dashboard({ onViewReport, onCreateReport }: DashboardPro
 
     setRows(built);
     setLoading(false);
+  }
+
+  async function loadUsage() {
+    const { data } = await supabase
+      .from('user_profiles')
+      .select('plan, monthly_analyses_used, analyses_reset_at')
+      .maybeSingle();
+    if (data) {
+      const plan = (data.plan ?? 'free') as PlanTier;
+      setUserPlan(plan);
+      // Reset counter if it's a new calendar month
+      const resetAt = data.analyses_reset_at ? new Date(data.analyses_reset_at) : null;
+      const now = new Date();
+      if (resetAt && (resetAt.getMonth() !== now.getMonth() || resetAt.getFullYear() !== now.getFullYear())) {
+        await supabase.from('user_profiles').update({ monthly_analyses_used: 0, analyses_reset_at: now.toISOString() }).eq('id', (await supabase.auth.getUser()).data.user!.id);
+        setAnalysesUsed(0);
+      } else {
+        setAnalysesUsed(data.monthly_analyses_used ?? 0);
+      }
+    }
+  }
+
+  function handleAddParcel() {
+    const limit = PLAN_LIMITS[userPlan];
+    if (limit !== null && analysesUsed >= limit) {
+      setShowLimitModal(true);
+    } else {
+      setShowModal(true);
+    }
   }
 
   async function handleDelete(parcelId: string) {
@@ -801,7 +835,7 @@ export default function Dashboard({ onViewReport, onCreateReport }: DashboardPro
           <p style={{ fontSize: 13, color: 'rgba(255,255,255,0.40)' }}>Soil suitability across your land portfolio</p>
         </div>
         <button
-          onClick={() => setShowModal(true)}
+          onClick={handleAddParcel}
           style={{
             background: '#30D158', color: '#000', border: 'none', borderRadius: 9,
             padding: '11px 18px', fontWeight: 700, fontSize: 13, cursor: 'pointer',
@@ -930,7 +964,7 @@ export default function Dashboard({ onViewReport, onCreateReport }: DashboardPro
             </p>
             {!search && filter === 'all' && (
               <button
-                onClick={() => setShowModal(true)}
+                onClick={handleAddParcel}
                 style={{
                   background: '#30D158', color: '#000', border: 'none', borderRadius: 9,
                   padding: '10px 18px', fontWeight: 700, fontSize: 13, cursor: 'pointer',
@@ -1094,12 +1128,68 @@ export default function Dashboard({ onViewReport, onCreateReport }: DashboardPro
       {showModal && (
         <AddParcelModal
           onClose={() => setShowModal(false)}
-          onCreated={(reportId) => {
+          onCreated={async (reportId) => {
             setShowModal(false);
+            // Increment usage counter
+            const { data: { user } } = await supabase.auth.getUser();
+            if (user) {
+              await supabase.from('user_profiles').upsert({
+                id: user.id,
+                monthly_analyses_used: analysesUsed + 1,
+              }, { onConflict: 'id' });
+              setAnalysesUsed(prev => prev + 1);
+            }
             loadData();
             onViewReport(reportId);
           }}
         />
+      )}
+
+      {/* Usage limit modal */}
+      {showLimitModal && (
+        <div
+          style={{
+            position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.65)', backdropFilter: 'blur(6px)',
+            display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000, padding: 20,
+          }}
+          onClick={() => setShowLimitModal(false)}
+        >
+          <div
+            style={{
+              background: 'rgb(13,17,26)', border: '1px solid rgba(255,255,255,0.10)', borderRadius: 16,
+              padding: 32, maxWidth: 420, width: '100%', textAlign: 'center',
+            }}
+            onClick={e => e.stopPropagation()}
+          >
+            <div style={{ width: 52, height: 52, borderRadius: 14, background: 'rgba(34,197,94,0.12)', border: '1px solid rgba(34,197,94,0.30)', display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 18px' }}>
+              <Zap style={{ width: 22, height: 22, color: '#22C55E' }} />
+            </div>
+            <h3 style={{ fontSize: 18, fontWeight: 700, color: '#fff', marginBottom: 8 }}>
+              {userPlan === 'free' ? 'Free trial limit reached' : 'Monthly limit reached'}
+            </h3>
+            <p style={{ fontSize: 14, color: 'rgba(255,255,255,0.45)', lineHeight: 1.6, marginBottom: 24 }}>
+              {userPlan === 'free'
+                ? `You've used all 3 free analyses. Upgrade to continue analyzing parcels.`
+                : `You've used all ${PLAN_LIMITS[userPlan]} analyses for this month. Upgrade for a higher limit.`}
+            </p>
+            <div style={{ display: 'flex', gap: 10 }}>
+              <button
+                onClick={() => setShowLimitModal(false)}
+                style={{ flex: 1, padding: '10px 0', borderRadius: 10, background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(255,255,255,0.10)', color: 'rgba(255,255,255,0.55)', fontSize: 13, fontWeight: 600, cursor: 'pointer' }}
+              >
+                Cancel
+              </button>
+              <button
+                onClick={() => { setShowLimitModal(false); onNavigateSettings?.(); }}
+                style={{ flex: 2, padding: '10px 0', borderRadius: 10, background: '#22C55E', border: 'none', color: '#000', fontSize: 13, fontWeight: 700, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6 }}
+              >
+                <Zap style={{ width: 14, height: 14 }} />
+                Upgrade Plan
+                <ArrowRight style={{ width: 14, height: 14 }} />
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );

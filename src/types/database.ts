@@ -111,12 +111,25 @@ export interface UserProfile {
   billing_state: string;
   billing_postal_code: string;
   billing_country: string;
-  plan: string;
+  plan: 'free' | 'starter' | 'pro' | 'unlimited';
   plan_status: string;
+  subscription_status: string | null;
   plan_renewal_date: string | null;
+  stripe_customer_id: string | null;
+  monthly_analyses_used: number;
+  analyses_reset_at: string | null;
   created_at: string;
   updated_at: string;
 }
+
+export type PlanTier = 'free' | 'starter' | 'pro' | 'unlimited';
+
+export const PLAN_LIMITS: Record<PlanTier, number | null> = {
+  free: 3,
+  starter: 15,
+  pro: 50,
+  unlimited: null,
+};
 
 export interface NearbyTest {
   id: string;
