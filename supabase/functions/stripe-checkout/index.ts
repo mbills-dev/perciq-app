@@ -10,16 +10,16 @@ const corsHeaders = {
 
 const PRICE_IDS: Record<string, Record<string, string>> = {
   starter: {
-    monthly: "price_starter_monthly",
-    annual: "price_starter_annual",
+    monthly: "price_1TcSpr4HNibJp1qsMmG5ILVz",
+    annual: "price_1TcSps4HNibJp1qskQtKARUe",
   },
   pro: {
-    monthly: "price_pro_monthly",
-    annual: "price_pro_annual",
+    monthly: "price_1TcSps4HNibJp1qsU8qaDGwL",
+    annual: "price_1TcSps4HNibJp1qsoxLHOmAd",
   },
   unlimited: {
-    monthly: "price_unlimited_monthly",
-    annual: "price_unlimited_annual",
+    monthly: "price_1TcSps4HNibJp1qsO3cmZUZS",
+    annual: "price_1TcSpr4HNibJp1qsdQ7YHMco",
   },
 };
 
