@@ -9,6 +9,28 @@ import SettingsPage from './components/SettingsPage';
 import PublicReportPage from './components/PublicReportPage';
 import { Layers } from 'lucide-react';
 
+const VALID_PLANS = ['starter', 'pro', 'unlimited', 'single_report'] as const;
+type PlanSlug = typeof VALID_PLANS[number];
+
+const PLAN_SESSION_KEY = 'perciq_pending_plan';
+
+function capturePlanParam() {
+  const params = new URLSearchParams(window.location.search);
+  const plan = params.get('plan');
+  if (plan && VALID_PLANS.includes(plan as PlanSlug)) {
+    sessionStorage.setItem(PLAN_SESSION_KEY, plan);
+  }
+}
+
+function consumePendingPlan(): PlanSlug | null {
+  const plan = sessionStorage.getItem(PLAN_SESSION_KEY) as PlanSlug | null;
+  if (plan && VALID_PLANS.includes(plan)) {
+    sessionStorage.removeItem(PLAN_SESSION_KEY);
+    return plan;
+  }
+  return null;
+}
+
 function getPublicReportId(): string | null {
   const match = window.location.pathname.match(/^\/report\/([a-f0-9-]{36})$/i);
   return match ? match[1] : null;
@@ -32,6 +54,34 @@ function setReportIdInUrl(reportId: string | null) {
   window.history.replaceState(null, '', url.toString());
 }
 
+async function redirectToStripeCheckout(plan: PlanSlug, authToken: string) {
+  const supabaseUrl = import.meta.env.VITE_SUPABASE_URL as string;
+  const anonKey = import.meta.env.VITE_SUPABASE_ANON_KEY as string;
+  const origin = window.location.origin;
+  try {
+    const resp = await fetch(`${supabaseUrl}/functions/v1/stripe-checkout`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${authToken}`,
+        apikey: anonKey,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        plan,
+        interval: plan === 'single_report' ? 'one_time' : 'monthly',
+        successUrl: `${origin}/?checkout=success`,
+        cancelUrl: `${origin}/`,
+      }),
+    });
+    const data = await resp.json() as { url?: string; error?: string };
+    if (data.url) {
+      window.location.href = data.url;
+    }
+  } catch (e) {
+    console.error('[stripe-redirect] failed:', e);
+  }
+}
+
 function AuthenticatedApp() {
   const [user, setUser] = useState<User | null>(null);
   const [authLoading, setAuthLoading] = useState(true);
@@ -39,14 +89,25 @@ function AuthenticatedApp() {
   const [settingsTab, setSettingsTab] = useState<SettingsTab>('profile');
   const [viewingReportId, setViewingReportId] = useState<string | null>(getReportIdFromUrl);
 
+  // Capture ?plan= param on every page load so it survives the auth redirect
+  useEffect(() => { capturePlanParam(); }, []);
+
   useEffect(() => {
     supabase.auth.getSession().then(({ data: { session } }) => {
       setUser(session?.user ?? null);
       setAuthLoading(false);
     });
 
-    supabase.auth.onAuthStateChange((_event, session) => {
+    supabase.auth.onAuthStateChange((event, session) => {
       setUser(session?.user ?? null);
+      if (event === 'SIGNED_IN' && session) {
+        (async () => {
+          const plan = consumePendingPlan();
+          if (plan) {
+            await redirectToStripeCheckout(plan, session.access_token);
+          }
+        })();
+      }
     });
   }, []);
 

@@ -21,6 +21,9 @@ const PRICE_IDS: Record<string, Record<string, string>> = {
     monthly: "price_1TcSps4HNibJp1qsO3cmZUZS",
     annual: "price_1TcSpr4HNibJp1qsdQ7YHMco",
   },
+  single_report: {
+    one_time: "price_1TcSpt4HNibJp1qsRce7qAkz",
+  },
 };
 
 Deno.serve(async (req: Request) => {
@@ -59,7 +62,7 @@ Deno.serve(async (req: Request) => {
     const body = await req.json();
     const { plan, interval = "monthly", successUrl, cancelUrl } = body as {
       plan: string;
-      interval: "monthly" | "annual";
+      interval: "monthly" | "annual" | "one_time";
       successUrl: string;
       cancelUrl: string;
     };
@@ -88,7 +91,9 @@ Deno.serve(async (req: Request) => {
         .upsert({ id: user.id, stripe_customer_id: customerId }, { onConflict: "id" });
     }
 
-    const priceId = PRICE_IDS[plan]?.[interval];
+    const isSingleReport = plan === "single_report";
+    const resolvedInterval = isSingleReport ? "one_time" : interval;
+    const priceId = PRICE_IDS[plan]?.[resolvedInterval];
     if (!priceId) {
       return new Response(JSON.stringify({ error: "Invalid plan or interval" }), {
         status: 400,
@@ -96,18 +101,27 @@ Deno.serve(async (req: Request) => {
       });
     }
 
-    const session = await stripe.checkout.sessions.create({
+    const sessionParams: Parameters<typeof stripe.checkout.sessions.create>[0] = {
       customer: customerId,
       payment_method_types: ["card"],
       line_items: [{ price: priceId, quantity: 1 }],
-      mode: "subscription",
+      mode: isSingleReport ? "payment" : "subscription",
       success_url: successUrl,
       cancel_url: cancelUrl,
       allow_promotion_codes: true,
-      subscription_data: {
+    };
+
+    if (!isSingleReport) {
+      sessionParams.subscription_data = {
         metadata: { supabase_user_id: user.id, plan },
-      },
-    });
+      };
+    } else {
+      sessionParams.payment_intent_data = {
+        metadata: { supabase_user_id: user.id, plan },
+      };
+    }
+
+    const session = await stripe.checkout.sessions.create(sessionParams);
 
     return new Response(JSON.stringify({ url: session.url }), {
       headers: { ...corsHeaders, "Content-Type": "application/json" },
