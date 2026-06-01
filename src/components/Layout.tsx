@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { supabase } from '../lib/supabase';
 import {
   LogOut,
-  Bell, User, CreditCard, Building2, ChevronDown,
+  Bell, User, CreditCard, Building2, ChevronDown, MessageSquare,
 } from 'lucide-react';
 
 type Page = 'dashboard' | 'settings';
@@ -197,6 +197,20 @@ export default function Layout({ children, currentPage, onNavigate, userEmail, f
       <main className={`flex-1 ${fullHeight ? 'overflow-hidden' : 'p-6 overflow-auto'}`}>
         {children}
       </main>
+
+      <a
+        href="https://perciq.canny.io/product-feedback"
+        target="_blank"
+        rel="noopener noreferrer"
+        className="fixed bottom-5 right-5 z-50 flex items-center gap-1.5 px-3.5 py-2 rounded-full text-xs font-semibold shadow-lg transition-all duration-200 hover:scale-105 hover:shadow-xl active:scale-95"
+        style={{
+          background: '#7fe0a0',
+          color: '#0f2318',
+        }}
+      >
+        <MessageSquare className="w-3.5 h-3.5" />
+        Feedback
+      </a>
     </div>
   );
 }
