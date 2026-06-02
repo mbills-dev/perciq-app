@@ -945,6 +945,11 @@ async function buildSoilPolygons(
       clipped.properties.floodOverlapPct = floodOverlapPct;
       clipped.properties.wetlandOverlapPct = wetlandOverlapPct;
       clipped.properties.mukey = mukeyStr;
+      // raw values preserved for independent site alert checks
+      clipped.properties.rawWatertableCm = clipped.properties.wtdepannmin != null ? parseFloat(clipped.properties.wtdepannmin as string) || null : null;
+      clipped.properties.rawResdeptCm = clipped.properties.resdept_r != null ? parseFloat(clipped.properties.resdept_r as string) || null : null;
+      clipped.properties.rawFlodfreqcl = clipped.properties.flodfreqcl ?? null;
+      clipped.properties.rawSlopePct = clipped.properties.slope_h != null ? parseFloat(clipped.properties.slope_h as string) || null : null;
 
       // Copy scoring properties onto a display copy of the full unclipped SSURGO polygon.
       // Large parcels often have many small clipped slivers that leave visual gaps — the full
@@ -1148,6 +1153,11 @@ interface SoilHoverData {
   restrictiveLayerScore: number | null;
   floodingScore: number | null;
   soilName: string;
+  // raw values for independent site alert checks (not blended into SI score)
+  rawWatertableCm: number | null;
+  rawResdeptCm: number | null;
+  rawFlodfreqcl: string | null;
+  rawSlopePct: number | null;
 }
 
 interface MapPanelProps {
@@ -2181,6 +2191,10 @@ function MapPanel({ reportId, cachedOverlayGeojson, parcelBoundary, isBboxFallba
           restrictiveLayerScore: hasScore && p.restrictiveLayerScore != null && p.restrictiveLayerScore !== 'null' ? Number(p.restrictiveLayerScore) : null,
           floodingScore: hasScore && p.floodingScore != null && p.floodingScore !== 'null' ? Number(p.floodingScore) : null,
           soilName: String(p.muname ?? p.musym ?? `Soil unit ${p.mukey ?? ''}`),
+          rawWatertableCm: p.rawWatertableCm != null && p.rawWatertableCm !== 'null' ? Number(p.rawWatertableCm) : null,
+          rawResdeptCm: p.rawResdeptCm != null && p.rawResdeptCm !== 'null' ? Number(p.rawResdeptCm) : null,
+          rawFlodfreqcl: p.rawFlodfreqcl != null && p.rawFlodfreqcl !== 'null' ? String(p.rawFlodfreqcl) : null,
+          rawSlopePct: p.rawSlopePct != null && p.rawSlopePct !== 'null' ? Number(p.rawSlopePct) : null,
         });
       });
       map.on('click', 'soil-fill', (e) => {
@@ -2203,6 +2217,10 @@ function MapPanel({ reportId, cachedOverlayGeojson, parcelBoundary, isBboxFallba
           restrictiveLayerScore: hasScore && p.restrictiveLayerScore != null && p.restrictiveLayerScore !== 'null' ? Number(p.restrictiveLayerScore) : null,
           floodingScore: hasScore && p.floodingScore != null && p.floodingScore !== 'null' ? Number(p.floodingScore) : null,
           soilName: String(p.muname ?? p.musym ?? `Soil unit ${p.mukey ?? ''}`),
+          rawWatertableCm: p.rawWatertableCm != null && p.rawWatertableCm !== 'null' ? Number(p.rawWatertableCm) : null,
+          rawResdeptCm: p.rawResdeptCm != null && p.rawResdeptCm !== 'null' ? Number(p.rawResdeptCm) : null,
+          rawFlodfreqcl: p.rawFlodfreqcl != null && p.rawFlodfreqcl !== 'null' ? String(p.rawFlodfreqcl) : null,
+          rawSlopePct: p.rawSlopePct != null && p.rawSlopePct !== 'null' ? Number(p.rawSlopePct) : null,
         });
       });
     } catch { /* ignore interaction setup errors */ } // end soil click/hover registration
@@ -4218,6 +4236,10 @@ export default function ReportDetail({ reportId, onBack, isPublic = false }: Rep
       restrictiveLayerScore: props.restrictiveLayerScore != null && props.restrictiveLayerScore !== 'null' ? Number(props.restrictiveLayerScore) : null,
       floodingScore: props.floodingScore != null && props.floodingScore !== 'null' ? Number(props.floodingScore) : null,
       soilName: String(props.muname ?? props.musym ?? `Soil ${tabPolygon.mukey}`),
+      rawWatertableCm: props.rawWatertableCm != null && props.rawWatertableCm !== 'null' ? Number(props.rawWatertableCm) : null,
+      rawResdeptCm: props.rawResdeptCm != null && props.rawResdeptCm !== 'null' ? Number(props.rawResdeptCm) : null,
+      rawFlodfreqcl: props.rawFlodfreqcl != null && props.rawFlodfreqcl !== 'null' ? String(props.rawFlodfreqcl) : null,
+      rawSlopePct: props.rawSlopePct != null && props.rawSlopePct !== 'null' ? Number(props.rawSlopePct) : null,
     };
   })();
 
@@ -4228,6 +4250,47 @@ export default function ReportDetail({ reportId, onBack, isPublic = false }: Rep
     const total = mapSoilPolygons.filter(p => p.bucket === 'viable').reduce((s, p) => { try { return s + turf.area(p.geojson); } catch { return s; } }, 0);
     return (total / 4047).toFixed(1);
   })();
+
+  // ── Site Alerts — independent of SI score ────────────────────────────────
+  const getSiteAlerts = (data: SoilHoverData | null): { criticals: string[]; warnings: string[] } => {
+    if (!data) return { criticals: [], warnings: [] };
+    const criticals: string[] = [];
+    const warnings: string[] = [];
+    const flood = (data.rawFlodfreqcl ?? '').toLowerCase();
+    if (flood === 'frequent' || flood === 'very frequent') {
+      criticals.push('High flood risk — septic installation not recommended');
+    }
+    if (data.wetlandOverlapPct > 25) {
+      criticals.push('Significant wetland overlap — regulatory approval unlikely');
+    } else if (data.wetlandOverlapPct >= 10) {
+      warnings.push('Partial wetland overlap — verify boundaries before ordering test');
+    }
+    if (data.floodOverlapPct > 25) {
+      criticals.push('High-risk flood zone — engineered system likely required');
+    } else if (data.floodOverlapPct >= 10) {
+      warnings.push('Partial flood zone — engineered system may be required');
+    }
+    if (data.rawWatertableCm !== null) {
+      const wtInches = data.rawWatertableCm * 0.394;
+      if (wtInches < 24) {
+        criticals.push('Shallow water table — conventional system unlikely to pass nationally');
+      } else if (wtInches < 36) {
+        warnings.push('Moderately shallow water table — investigate before ordering perc test');
+      }
+    }
+    if (data.rawResdeptCm !== null) {
+      const rdInches = data.rawResdeptCm * 0.394;
+      if (rdInches < 20) {
+        criticals.push('Shallow restrictive layer — insufficient depth for standard installation');
+      } else if (rdInches < 36) {
+        warnings.push('Shallow restrictive layer — may limit system options');
+      }
+    }
+    if (data.rawSlopePct !== null && data.rawSlopePct > 15) {
+      warnings.push('Steep slope — site-specific design likely needed');
+    }
+    return { criticals, warnings };
+  };
 
   // HUD verdict logic
   const getVerdict = (data: SoilHoverData | null): { title: string; body: string; color: string; bg: string; border: string } => {
@@ -4243,31 +4306,35 @@ export default function ReportDetail({ reportId, onBack, isPublic = false }: Rep
       };
     }
     if (data.bucket === 'viable') {
-      const hasFlood = data.floodOverlapPct >= 20;
-      const hasWetland = data.wetlandOverlapPct >= 10;
-      const bodyNote = hasFlood
-        ? `Good soil but ${data.floodOverlapPct}% flood zone overlap — verify buildable portion with county before ordering a perc test.`
-        : hasWetland
-          ? `${data.soilName}. ${data.wetlandOverlapPct}% wetland overlap detected — confirm setback requirements.`
-          : `${data.soilName}. No significant flood or wetland overlap. Suitable for conventional or alternative systems.`;
+      const alerts = getSiteAlerts(data);
+      const hasCriticals = alerts.criticals.length > 0;
+      const warnCount = alerts.warnings.length;
+      const title = hasCriticals
+        ? 'Viable soil but critical site alert detected — review before proceeding'
+        : warnCount > 0
+          ? `Good candidate for septic — ${warnCount} factor${warnCount > 1 ? 's' : ''} worth investigating`
+          : 'Good candidate for septic — no critical factors detected';
       return {
-        title: 'Good candidate for septic',
-        body: bodyNote,
+        title,
+        body: `${data.soilName}. SI score reflects soil permeability, drainage, and slope. Site alerts above are independent checks.`,
         color: '#30D158', bg: 'rgba(48,209,88,0.07)', border: 'rgba(48,209,88,0.25)',
       };
     }
-    if (data.bucket === 'engineering-needed') return {
-      title: 'Engineering needed — evaluate buildable area before ordering a perc test',
-      body: `Marginal soil or significant flood/wetland overlap. Alternative system (mound or drip) may be needed.`,
-      color: '#FF9F0A', bg: 'rgba(255,159,10,0.07)', border: 'rgba(255,159,10,0.25)',
-    };
-    if (data.bucket === 'not-suitable') {
-      const floodDriven = data.floodOverlapPct >= 50 || data.wetlandOverlapPct >= 50;
+    if (data.bucket === 'engineering-needed') {
+      const alerts = getSiteAlerts(data);
+      const hasCriticals = alerts.criticals.length > 0;
       return {
-        title: floodDriven ? 'Avoid — unlikely to be permitted' : 'Not suitable — severe site limitations',
-        body: floodDriven
-          ? 'High flood or wetland overlap. County will likely deny septic permit regardless of soil quality.'
-          : 'Severe site limitations detected. Multiple factors indicate this zone is unlikely to support a conventional or alternative septic system.',
+        title: hasCriticals
+          ? 'Marginal soil with critical site alert — engineering required'
+          : 'Marginal soil — engineering evaluation recommended',
+        body: 'Soil factors indicate engineering evaluation is needed. Review site alerts above for additional constraints.',
+        color: '#FF9F0A', bg: 'rgba(255,159,10,0.07)', border: 'rgba(255,159,10,0.25)',
+      };
+    }
+    if (data.bucket === 'not-suitable') {
+      return {
+        title: 'Not recommended for conventional septic',
+        body: 'Severe soil limitations detected. Multiple factors indicate this zone is unlikely to support a conventional or alternative septic system.',
         color: '#FF453A', bg: 'rgba(255,69,58,0.07)', border: 'rgba(255,69,58,0.25)',
       };
     }
@@ -4308,9 +4375,10 @@ export default function ReportDetail({ reportId, onBack, isPublic = false }: Rep
 
   const verdict = getVerdict(hudData);
   const flags = getFlags(hudData);
+  const siteAlerts = getSiteAlerts(hudData);
   const isHovering = !!hudHover;
   const isLocked = !!hudLocked && !hudHover;
-  const activeSource = hudData ?? { drainScore: 0, ksatScore: 0, slopeScore: 0, wtScore: 0, pondingScore: null as number | null, restrictiveLayerScore: null as number | null, floodingScore: null as number | null, floodOverlapPct: 0, wetlandOverlapPct: 0, soilName: '—', finalScore: 0, bucket: 'no-data' as const, mukey: '' };
+  const activeSource = hudData ?? { drainScore: 0, ksatScore: 0, slopeScore: 0, wtScore: 0, pondingScore: null as number | null, restrictiveLayerScore: null as number | null, floodingScore: null as number | null, floodOverlapPct: 0, wetlandOverlapPct: 0, soilName: '—', finalScore: 0, bucket: 'no-data' as const, mukey: '', rawWatertableCm: null as number | null, rawResdeptCm: null as number | null, rawFlodfreqcl: null as string | null, rawSlopePct: null as number | null };
 
   const barColor = (v: number) => v >= 70 ? '#30D158' : v >= 45 ? '#FF9F0A' : '#FF453A';
   const bucketColor = (b: string) => b === 'viable' ? '#22C55E' : b === 'not-suitable' ? '#FF4539' : b === 'engineering-needed' ? '#FF9F09' : '#6B7280';
@@ -4563,6 +4631,85 @@ export default function ReportDetail({ reportId, onBack, isPublic = false }: Rep
               ))}
             </div>
 
+            {/* Site Alerts banner */}
+            {hudData && (() => {
+              const hasCriticals = siteAlerts.criticals.length > 0;
+              const hasWarnings = siteAlerts.warnings.length > 0;
+              if (!hasCriticals && !hasWarnings) {
+                return (
+                  <div style={{
+                    display: 'flex', alignItems: 'center', gap: 7,
+                    padding: '7px 11px', borderRadius: 8,
+                    background: 'rgba(48,209,88,0.08)', border: '1px solid rgba(48,209,88,0.25)',
+                  }}>
+                    <span style={{ fontSize: 13, lineHeight: 1 }}>✅</span>
+                    <span style={{ fontSize: 11, color: '#30D158', fontWeight: 600 }}>No site alerts detected</span>
+                  </div>
+                );
+              }
+              if (hasCriticals) {
+                return (
+                  <div style={{
+                    borderRadius: 8, overflow: 'hidden',
+                    border: '1px solid rgba(255,69,58,0.40)',
+                    background: 'rgba(255,69,58,0.07)',
+                  }}>
+                    <div style={{
+                      display: 'flex', alignItems: 'center', gap: 7,
+                      padding: '7px 11px',
+                      background: 'rgba(255,69,58,0.12)',
+                      borderBottom: siteAlerts.criticals.length > 0 ? '1px solid rgba(255,69,58,0.20)' : 'none',
+                    }}>
+                      <span style={{ fontSize: 13, lineHeight: 1 }}>⛔</span>
+                      <span style={{ fontSize: 11, color: '#FF453A', fontWeight: 700 }}>Critical site alert — review before ordering perc test</span>
+                    </div>
+                    <div style={{ padding: '6px 11px 8px', display: 'flex', flexDirection: 'column', gap: 4 }}>
+                      {siteAlerts.criticals.map((msg, i) => (
+                        <div key={i} style={{ display: 'flex', alignItems: 'flex-start', gap: 6 }}>
+                          <span style={{ fontSize: 10, color: '#FF453A', flexShrink: 0, marginTop: 1 }}>⛔</span>
+                          <span style={{ fontSize: 11, color: 'rgba(255,120,110,0.90)', lineHeight: 1.45 }}>{msg}</span>
+                        </div>
+                      ))}
+                      {siteAlerts.warnings.map((msg, i) => (
+                        <div key={`w${i}`} style={{ display: 'flex', alignItems: 'flex-start', gap: 6 }}>
+                          <span style={{ fontSize: 10, color: '#FF9F0A', flexShrink: 0, marginTop: 1 }}>⚠️</span>
+                          <span style={{ fontSize: 11, color: 'rgba(255,159,10,0.85)', lineHeight: 1.45 }}>{msg}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                );
+              }
+              // warnings only
+              return (
+                <div style={{
+                  borderRadius: 8, overflow: 'hidden',
+                  border: '1px solid rgba(255,159,10,0.35)',
+                  background: 'rgba(255,159,10,0.07)',
+                }}>
+                  <div style={{
+                    display: 'flex', alignItems: 'center', gap: 7,
+                    padding: '7px 11px',
+                    background: 'rgba(255,159,10,0.10)',
+                    borderBottom: '1px solid rgba(255,159,10,0.18)',
+                  }}>
+                    <span style={{ fontSize: 13, lineHeight: 1 }}>⚠️</span>
+                    <span style={{ fontSize: 11, color: '#FF9F0A', fontWeight: 700 }}>
+                      {siteAlerts.warnings.length} site warning{siteAlerts.warnings.length > 1 ? 's' : ''} — review before ordering perc test
+                    </span>
+                  </div>
+                  <div style={{ padding: '6px 11px 8px', display: 'flex', flexDirection: 'column', gap: 4 }}>
+                    {siteAlerts.warnings.map((msg, i) => (
+                      <div key={i} style={{ display: 'flex', alignItems: 'flex-start', gap: 6 }}>
+                        <span style={{ fontSize: 10, color: '#FF9F0A', flexShrink: 0, marginTop: 1 }}>⚠️</span>
+                        <span style={{ fontSize: 11, color: 'rgba(255,159,10,0.85)', lineHeight: 1.45 }}>{msg}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              );
+            })()}
+
             {/* Verdict + Zone score — side by side */}
             <div style={{
               display: 'flex',
@@ -4630,14 +4777,15 @@ export default function ReportDetail({ reportId, onBack, isPublic = false }: Rep
                 if (label === 'Drainage') {
                   if (v === null) return 'Drainage class unknown.';
                   if (v >= 80) return 'Well drained — favorable conditions for septic.';
-                  if (v >= 55) return 'Moderately drained — monitor for seasonal saturation.';
+                  if (v >= 65) return 'Somewhat excessively drained — drains freely, low saturation risk.';
+                  if (v >= 55) return 'Moderately well drained — adequate for most conventional systems.';
                   return 'Poorly drained — high risk of system failure.';
                 }
                 if (label === 'Permeability') {
                   if (v === null) return 'Permeability data unavailable.';
-                  if (v >= 80) return 'Good permeability — water moves through soil well.';
-                  if (v >= 55) return 'Moderate permeability — alternative systems may be needed.';
-                  return 'Low permeability — conventional systems unlikely to pass.';
+                  if (v >= 80) return 'Good permeability — ideal range for conventional absorption.';
+                  if (v >= 55) return 'Moderate-fast permeability — conventional systems generally approvable. Verify local design requirements.';
+                  return 'Low permeability — may require engineered system. Verify with local health department.';
                 }
                 if (label === 'Slope') {
                   if (v === null) return 'Slope data unavailable.';
