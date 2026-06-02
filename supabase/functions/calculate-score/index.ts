@@ -20,7 +20,10 @@ interface SoilResult {
   drainage_class: string | null;
   perc_class: string | null;
   nrcs_septic_rating: string | null;
-  depth_water_table: number | null; // inches
+  // water_table_depth: seasonal high water table from cosoilmoist (soimoistdept_l where Wet), inches
+  water_table_depth: number | null;
+  // depth_water_table: restrictive layer depth (resdept_r), inches — kept for backwards compat
+  depth_water_table: number | null;
   ksat_low: number | null;
   ksat_r: number | null;
   ksat_high: number | null;
@@ -262,7 +265,7 @@ function computeConfidence(
 
   // Data completeness: check key fields
   const fields: Array<keyof SoilResult> = [
-    "nrcs_septic_rating", "ksat_high", "depth_water_table", "drainage_class", "slope_high",
+    "nrcs_septic_rating", "ksat_high", "water_table_depth", "drainage_class", "slope_high",
   ];
   const completeness = soilResults.reduce((acc, r) => {
     const present = fields.filter((f) => r[f] != null).length;
@@ -295,21 +298,38 @@ interface ComponentScore {
   explanations: string[];
 }
 
+function scoreRestrictiveLayer(resdept_r: number | null, reskind: string | null): { multiplier: number; note: string } {
+  const LIMITING = ['bedrock', 'paralithic', 'fragipan', 'duripan', 'cemented', 'ortstein', 'permafrost', 'densic'];
+  const isLimiting = reskind != null && LIMITING.some(k => reskind.toLowerCase().includes(k));
+
+  if (resdept_r == null) {
+    if (isLimiting) return { multiplier: 0.85, note: `Restrictive layer (${reskind}) depth unknown — applying precautionary penalty` };
+    return { multiplier: 1.0, note: "No restrictive layer recorded" };
+  }
+  if (resdept_r > 60) return { multiplier: 1.0, note: `Restrictive layer (${reskind ?? "unknown"}) at ${resdept_r.toFixed(0)} inches — deep enough for conventional drainfield` };
+  if (resdept_r >= 36) return { multiplier: 0.80, note: `Restrictive layer (${reskind ?? "unknown"}) at ${resdept_r.toFixed(0)} inches — limits drainfield depth, engineered design likely required` };
+  if (resdept_r >= 18) return { multiplier: 0.50, note: `Restrictive layer (${reskind ?? "unknown"}) at ${resdept_r.toFixed(0)} inches — severely limits conventional system options` };
+  return { multiplier: 0.15, note: `Restrictive layer (${reskind ?? "unknown"}) at ${resdept_r.toFixed(0)} inches — drainfield installation not feasible` };
+}
+
 function scoreComponent(r: SoilResult, lenientAlt: boolean): ComponentScore {
   const explanations: string[] = [];
 
   const nrcs = scoreNrcs(r.nrcs_septic_rating);
   explanations.push(nrcs.note);
 
-  // Use ksat_r (representative value) — the correct field for scoring septic suitability.
-  // ksat_high is the theoretical maximum and produces unfairly low scores for sandy soils.
+  // Use ksat_r (representative value) — correct field for scoring septic suitability.
   const ksatVal = r.ksat_r ?? r.ksat_high ?? r.ksat_low;
   const ksatConv = scoreKsat(ksatVal, false);
   const ksatAlt = scoreKsat(ksatVal, lenientAlt);
   explanations.push(ksatConv.note);
 
-  const wtConv = scoreWaterTable(r.depth_water_table, false);
-  const wtAlt = scoreWaterTable(r.depth_water_table, lenientAlt);
+  // Use water_table_depth (true seasonal high water table from cosoilmoist).
+  // Fall back to depth_water_table (resdept_r) only if water_table_depth is null,
+  // since for soils with shallow bedrock the two often align.
+  const wtDepth = r.water_table_depth ?? null;
+  const wtConv = scoreWaterTable(wtDepth, false);
+  const wtAlt = scoreWaterTable(wtDepth, lenientAlt);
   explanations.push(wtConv.note);
 
   const drain = scoreDrainage(r.drainage_class);
@@ -318,19 +338,27 @@ function scoreComponent(r: SoilResult, lenientAlt: boolean): ComponentScore {
   const slope = scoreSlope(r.slope_low, r.slope_high);
   explanations.push(slope.note);
 
-  const convPts =
+  // Restrictive layer is a separate multiplier, not folded into water table score.
+  const reskind = (r.raw_ssurgo?.reskind as string | null) ?? null;
+  const restrictive = scoreRestrictiveLayer(r.depth_water_table, reskind);
+  explanations.push(restrictive.note);
+
+  const baseConv =
     nrcs.pts * WEIGHTS_CONV.nrcs +
     ksatConv.pts * WEIGHTS_CONV.ksat +
     wtConv.pts * WEIGHTS_CONV.waterTable +
     drain.pts * WEIGHTS_CONV.drainage +
     slope.pts * WEIGHTS_CONV.slope;
 
-  const altPts =
+  const baseAlt =
     nrcs.pts * WEIGHTS_CONV.nrcs +
     ksatAlt.pts * WEIGHTS_CONV.ksat +
     wtAlt.pts * WEIGHTS_CONV.waterTable +
     drain.pts * WEIGHTS_CONV.drainage +
     slope.pts * WEIGHTS_CONV.slope;
+
+  const convPts = baseConv * restrictive.multiplier;
+  const altPts = baseAlt * (lenientAlt ? Math.min(1.0, restrictive.multiplier * 1.2) : restrictive.multiplier);
 
   return {
     mapUnitKey: r.map_unit_key ?? "unknown",

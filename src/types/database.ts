@@ -76,7 +76,8 @@ export interface SoilResult {
   drainage_class: string | null;
   perc_class: string | null;
   nrcs_septic_rating: string | null;
-  depth_water_table: number | null;
+  depth_water_table: number | null;  // restrictive layer depth (resdept_r), inches
+  water_table_depth: number | null;  // true seasonal high water table (cosoilmoist), inches
   ksat_low: number | null;
   ksat_r: number | null;
   ksat_high: number | null;

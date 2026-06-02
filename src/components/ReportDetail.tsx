@@ -918,7 +918,8 @@ async function buildSoilPolygons(
           ksat_l: result.ksat_low ?? props.ksat_l,
           slope_h: result.slope_high ?? props.slope_h,
           slope_r: result.slope_high ?? props.slope_r,
-          wtdepannmin: result.depth_water_table ?? props.wtdepannmin,
+          // water_table_depth = true seasonal high water table (cosoilmoist); DO NOT use depth_water_table here
+          wtdepannmin: result.water_table_depth ?? props.wtdepannmin,
           pondfreqcl: raw.pondfreqcl ?? props.pondfreqcl ?? null,
           flodfreqcl: raw.flodfreqcl ?? props.flodfreqcl ?? null,
           resdept_r: raw.resdept_r ?? props.resdept_r ?? null,

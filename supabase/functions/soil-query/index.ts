@@ -131,6 +131,8 @@ interface SDARow {
   reskind: string | null;
   pondfreqcl: string | null;
   flodfreqcl: string | null;
+  // Seasonal high water table: minimum soimoistdept_l (cm) across months where soimoiststat='Wet'
+  water_table_cm: number | null;
 }
 
 function parseTable(sdaJson: Record<string, unknown>, hasRating: boolean): SDARow[] {
@@ -156,7 +158,7 @@ function parseTable(sdaJson: Record<string, unknown>, hasRating: boolean): SDARo
   const iDrain       = idx("drainagecl");
   const iSlopeL      = idx("slope_l");
   const iSlopeH      = idx("slope_h");
-  const iRating      = hasRating ? idx("interphrc") : -1;
+  const iRating      = hasRating ? idx("septic_rating") : -1;
   const iTexture     = idx("texture_l");
   const iKsatL       = idx("ksat_l");
   const iKsatR       = idx("ksat_r");
@@ -165,26 +167,28 @@ function parseTable(sdaJson: Record<string, unknown>, hasRating: boolean): SDARo
   const iReskind     = idx("reskind");
   const iPondfreq    = idx("pondfreqcl");
   const iFlodfreq    = idx("flodfreqcl");
+  const iWaterTable  = idx("water_table_cm");
 
   return table.slice(1).map((row) => ({
-    mukey:        String(row[iMukey]),
-    muname:       toStr(row[iMuname]) ?? "",
-    musym:        toStr(row[iMusym]) ?? "",
-    cokey:        String(row[iCokey]),
-    majcompflag:  String(row[iMajcomp]),
-    comppct_r:    toNum(row[iComppct]),
-    drainagecl:   toStr(row[iDrain]),
-    slope_l:      toNum(row[iSlopeL]),
-    slope_h:      toNum(row[iSlopeH]),
-    septic_rating: iRating >= 0 ? toStr(row[iRating]) : null,
-    texture_l:    toStr(row[iTexture]),
-    ksat_l:       toNum(row[iKsatL]),
-    ksat_r:       toNum(row[iKsatR]),
-    ksat_h:       toNum(row[iKsatH]),
-    resdept_r:    toNum(row[iResdept]),
-    reskind:      iReskind >= 0 ? toStr(row[iReskind]) : null,
-    pondfreqcl:   iPondfreq >= 0 ? toStr(row[iPondfreq]) : null,
-    flodfreqcl:   iFlodfreq >= 0 ? toStr(row[iFlodfreq]) : null,
+    mukey:          String(row[iMukey]),
+    muname:         toStr(row[iMuname]) ?? "",
+    musym:          toStr(row[iMusym]) ?? "",
+    cokey:          String(row[iCokey]),
+    majcompflag:    String(row[iMajcomp]),
+    comppct_r:      toNum(row[iComppct]),
+    drainagecl:     toStr(row[iDrain]),
+    slope_l:        toNum(row[iSlopeL]),
+    slope_h:        toNum(row[iSlopeH]),
+    septic_rating:  iRating >= 0 ? toStr(row[iRating]) : null,
+    texture_l:      toStr(row[iTexture]),
+    ksat_l:         toNum(row[iKsatL]),
+    ksat_r:         toNum(row[iKsatR]),
+    ksat_h:         toNum(row[iKsatH]),
+    resdept_r:      toNum(row[iResdept]),
+    reskind:        iReskind >= 0 ? toStr(row[iReskind]) : null,
+    pondfreqcl:     iPondfreq >= 0 ? toStr(row[iPondfreq]) : null,
+    flodfreqcl:     iFlodfreq >= 0 ? toStr(row[iFlodfreq]) : null,
+    water_table_cm: iWaterTable >= 0 ? toNum(row[iWaterTable]) : null,
   }));
 }
 
@@ -211,9 +215,14 @@ function wktPolygonToGeojson(wkt: string): Record<string, unknown> | null {
   }
 }
 
-// POST to SDA — primary query with NC septic interp
+// POST to SDA.
+// Seasonal high water table: minimum soimoistdept_l (cm) across cosoilmoist records
+// where soimoiststat = 'Wet' — this is the correct SSURGO source for water table depth.
 // flodfreqcl and pondfreqcl live in comonth (not component), so we use correlated
 // subqueries to get the worst-case value per component across all months.
+// NRCS septic interp: 'ENG - Septic Tank Absorption Fields' is the current live name
+// in SDA (verified 2026-06 against mukey 113087). The old 'NC - Septic Tank Absorption
+// Fields' name returns no rows.
 async function querySDA(wkt: string, withInterp: boolean): Promise<Record<string, unknown>> {
   const freqSubqueries = `
   (SELECT TOP 1 flodfreqcl FROM comonth WHERE cokey = c.cokey
@@ -221,7 +230,12 @@ async function querySDA(wkt: string, withInterp: boolean): Promise<Record<string
   ) as flodfreqcl,
   (SELECT TOP 1 pondfreqcl FROM comonth WHERE cokey = c.cokey
     ORDER BY CASE pondfreqcl WHEN 'Frequent' THEN 1 WHEN 'Occasional' THEN 2 WHEN 'Rare' THEN 3 ELSE 4 END
-  ) as pondfreqcl`;
+  ) as pondfreqcl,
+  (SELECT MIN(csm.soimoistdept_l)
+   FROM comonth cm2
+   JOIN cosoilmoist csm ON csm.comonthkey = cm2.comonthkey
+   WHERE cm2.cokey = c.cokey AND csm.soimoiststat = 'Wet'
+  ) as water_table_cm`;
 
   const sql = withInterp
     ? `SELECT mu.mukey, mu.muname,
@@ -234,7 +248,8 @@ async function querySDA(wkt: string, withInterp: boolean): Promise<Record<string
 FROM mapunit mu
 JOIN component c ON mu.mukey = c.mukey AND c.majcompflag = 'Yes'
 LEFT JOIN cointerp ci ON c.cokey = ci.cokey
-  AND ci.mrulename = 'NC - Septic Tank Absorption Fields'
+  AND ci.mrulename = 'ENG - Septic Tank Absorption Fields'
+  AND ci.ruledepth = 0
 LEFT JOIN chorizon h ON c.cokey = h.cokey AND h.hzdept_r = 0
 LEFT JOIN corestrictions r ON c.cokey = r.cokey
 WHERE mu.mukey IN (
@@ -374,18 +389,18 @@ Deno.serve(async (req: Request) => {
       }
     }
 
-    // ── Query SDA: NC interp first, then basic query ───────────────────────────
+    // ── Query SDA: try with NRCS interp first, fall back to basic query ────────
     let rows: SDARow[] = [];
     let hasRating = false;
 
     try {
-      console.log("[soil-query] trying NC interp query, WKT length:", wkt.length);
+      console.log("[soil-query] trying interp query (ENG - Septic Tank Absorption Fields), WKT length:", wkt.length);
       const sdaJson = await querySDA(wkt, true);
       rows = parseTable(sdaJson, true);
       hasRating = true;
-      console.log("[soil-query] NC interp query returned", rows.length, "rows");
+      console.log("[soil-query] interp query returned", rows.length, "rows, ratings:", rows.filter(r => r.septic_rating).length, "non-null");
     } catch (e) {
-      console.warn("[soil-query] NC interp query failed:", (e as Error).message, "— trying basic");
+      console.warn("[soil-query] interp query failed:", (e as Error).message, "— trying basic");
       try {
         const sdaJson = await querySDA(wkt, false);
         rows = parseTable(sdaJson, false);
@@ -408,10 +423,14 @@ Deno.serve(async (req: Request) => {
     }
 
     // Save soil results — clear existing rows unless appending (subsequent sub-polygon queries).
-    // soil_polygon_geojson is populated later by the frontend after the WFS fetch completes.
     if (!append_results) {
       await serviceClient.from("soil_results").delete().eq("report_id", report_id);
     }
+
+    // Convert water_table_cm (cm) to inches for storage.
+    // water_table_cm is the minimum soimoistdept_l (top of wet zone) across all wet months.
+    // depth_water_table continues to store resdept_r (restrictive layer) for backwards compat.
+    const CM_TO_IN = 0.393701;
 
     const soilInserts = rows.map((row) => ({
       report_id,
@@ -421,7 +440,10 @@ Deno.serve(async (req: Request) => {
       drainage_class: row.drainagecl,
       perc_class: derivePercClass(row.ksat_r),
       nrcs_septic_rating: row.septic_rating,
-      depth_water_table: row.resdept_r,
+      depth_water_table: row.resdept_r,            // restrictive layer depth — kept for backwards compat
+      water_table_depth: row.water_table_cm != null // true seasonal high water table
+        ? Math.round(row.water_table_cm * CM_TO_IN)
+        : null,
       ksat_low: row.ksat_l,
       ksat_r: row.ksat_r,
       ksat_high: row.ksat_h,
