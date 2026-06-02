@@ -248,7 +248,7 @@ async function querySDA(wkt: string, withInterp: boolean): Promise<Record<string
 FROM mapunit mu
 JOIN component c ON mu.mukey = c.mukey AND c.majcompflag = 'Yes'
 LEFT JOIN cointerp ci ON c.cokey = ci.cokey
-  AND ci.mrulename = 'ENG - Septic Tank Absorption Fields'
+  AND ci.mrulename LIKE 'ENG - Septic Tank Absorption Fields%'
   AND ci.ruledepth = 0
 LEFT JOIN chorizon h ON c.cokey = h.cokey AND h.hzdept_r = 0
 LEFT JOIN corestrictions r ON c.cokey = r.cokey

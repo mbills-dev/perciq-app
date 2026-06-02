@@ -146,8 +146,8 @@ function scoreSoilPolygon(
     const d = (drainagecl ?? muname).toLowerCase();
     if (d.includes('well drained') && !d.includes('somewhat') && !d.includes('moderately')) return 90;
     if (d.includes('moderately well')) return 75;
-    if (d.includes('somewhat excessively')) return 65;
-    if (d.includes('excessively') && !d.includes('somewhat')) return 50;
+    if (d.includes('somewhat excessively')) return 75;
+    if (d.includes('excessively') && !d.includes('somewhat')) return 65;
     if (d.includes('somewhat poorly')) return 35;
     if (d.includes('very poorly')) return 0;
     if (d.includes('poorly') && !d.includes('somewhat')) return 10;
@@ -161,7 +161,7 @@ function scoreSoilPolygon(
     if (ksat >= 1.0 && ksat <= 6.0) return 100;   // ideal range
     if (ksat >= 0.4 && ksat < 1.0) return 60;     // slightly slow
     if (ksat > 6.0 && ksat <= 20.0) return 40;    // moderately fast
-    if (ksat > 20.0 && ksat <= 150.0) return 25;  // fast (coarse sand) — approvable with pump dosing
+    if (ksat > 20.0 && ksat <= 150.0) return 65;  // 7–30 min/inch — within EPA national conventional range
     if (ksat < 0.4) return 10;                    // very slow — clay dominated
     return 10;                                    // > 150 µm/s — gravel, no treatment capacity
   })();
@@ -179,7 +179,10 @@ function scoreSoilPolygon(
 
   // ── Factor D: Water table (20%) ──────────────────────────────────────────
   const watertableScore = (() => {
-    if (watertable === null) return 55;
+    if (watertable === null) {
+      const d = (drainagecl ?? '').toLowerCase();
+      return d.includes('excessively drained') ? 85 : 55;
+    }
     if (watertable >= 120) return 95;
     if (watertable >= 90) return 80;
     if (watertable >= 60) return 60;

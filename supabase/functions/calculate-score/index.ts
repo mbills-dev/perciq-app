@@ -118,10 +118,9 @@ function scoreKsat(ksat: number | null, lenient = false): { pts: number; note: s
     pts = 40;
     note = `Ksat is ${ksat.toFixed(2)} µm/s — moderately fast permeability; effluent treatment may be reduced`;
   } else if (lo > 20.0 && lo <= 150.0) {
-    // Coarse sandy soils (e.g. Candor sand, ~42–141 µm/s) fall here. These are approvable
-    // in NC and similar states with pump dosing / pressure distribution — not unsuitable.
-    pts = 25;
-    note = `Ksat is ${ksat.toFixed(2)} µm/s — fast permeability (coarse sand); conventional gravity systems unlikely but pump/pressure-dosed systems are typically approvable`;
+    // 20–150 µm/s ≈ 7–30 min/inch — within EPA's national 1–60 min/inch conventional range.
+    pts = 65;
+    note = `Ksat is ${ksat.toFixed(2)} µm/s — moderate-fast permeability; conventional systems generally approvable. Verify local design requirements`;
   } else if (lo < 0.4) {
     pts = 10;
     note = `Ksat is ${ksat.toFixed(2)} µm/s — very slow permeability; soil is likely clay-dominated and unsuitable for conventional drainfields`;
@@ -137,8 +136,13 @@ function scoreKsat(ksat: number | null, lenient = false): { pts: number; note: s
   return { pts, note };
 }
 
-function scoreWaterTable(depthIn: number | null, lenient = false): { pts: number; note: string } {
+function scoreWaterTable(depthIn: number | null, lenient = false, drainagecl: string | null = null): { pts: number; note: string } {
   if (depthIn === null) {
+    const d = (drainagecl ?? "").toLowerCase();
+    const isExcessive = d.includes("excessively drained");
+    if (isExcessive) {
+      return { pts: 85, note: "Depth to seasonal water table not recorded — soil drainage class indicates no seasonal saturation risk" };
+    }
     return { pts: 50, note: "Depth to seasonal water table data not available — using neutral score" };
   }
   const threshold = lenient ? depthIn * 1.4 : depthIn;
@@ -167,8 +171,8 @@ function scoreWaterTable(depthIn: number | null, lenient = false): { pts: number
 function scoreDrainage(drainagecl: string | null): { pts: number; note: string } {
   const d = drainagecl ?? "";
   const map: Array<{ match: string; pts: number; note: string }> = [
-    { match: "Excessively drained", pts: 60, note: `Soil drainage class is excessively drained — good infiltration but may lack treatment capacity` },
-    { match: "Somewhat excessively drained", pts: 75, note: `Soil drainage class is somewhat excessively drained — generally suitable` },
+    { match: "Excessively drained", pts: 65, note: `Soil drainage class is excessively drained — good infiltration but may lack treatment capacity` },
+    { match: "Somewhat excessively drained", pts: 75, note: `Soil drainage class is somewhat excessively drained — generally suitable for conventional systems` },
     { match: "Well drained", pts: 100, note: `Soil drainage class is well drained — ideal for conventional septic systems` },
     { match: "Moderately well drained", pts: 70, note: `Soil drainage class is moderately well drained — adequate for most conventional systems` },
     { match: "Somewhat poorly drained", pts: 30, note: `Soil drainage class is somewhat poorly drained — seasonal saturation limits system options` },
@@ -328,8 +332,8 @@ function scoreComponent(r: SoilResult, lenientAlt: boolean): ComponentScore {
   // Fall back to depth_water_table (resdept_r) only if water_table_depth is null,
   // since for soils with shallow bedrock the two often align.
   const wtDepth = r.water_table_depth ?? null;
-  const wtConv = scoreWaterTable(wtDepth, false);
-  const wtAlt = scoreWaterTable(wtDepth, lenientAlt);
+  const wtConv = scoreWaterTable(wtDepth, false, r.drainage_class);
+  const wtAlt = scoreWaterTable(wtDepth, lenientAlt, r.drainage_class);
   explanations.push(wtConv.note);
 
   const drain = scoreDrainage(r.drainage_class);
