@@ -3692,11 +3692,10 @@ export default function ReportDetail({ reportId, onBack, isPublic = false }: Rep
       } catch { /* ignore */ }
       return 0;
     })();
-    const storedHasSufficientDetail = storedCoordCount >= 20;
     parcelComplexRef.current = storedCoordCount > 200;
 
-    if (storedIsPolygon && storedSource === 'regrid' && storedHasSufficientDetail) {
-      // Trust stored boundary only when it came from Regrid with sufficient coordinate detail
+    if (storedIsPolygon && storedSource === 'regrid') {
+      // Trust any stored Regrid boundary — it was previously fetched and persisted
       boundary = storedGeo!;
       setBoundarySource(storedSource);
       console.log('[pipeline] using stored Regrid boundary — coords:', storedCoordCount, '— skipping fetch');
@@ -3881,6 +3880,8 @@ export default function ReportDetail({ reportId, onBack, isPublic = false }: Rep
 
   useEffect(() => {
     if (!report) return;
+    // Guard: only act once per report ID regardless of how many times state updates cause re-fires
+    if (pipelineRanRef.current === report.id) return;
     if (report.status === 'complete' && report.conventional_score !== null) {
       const cacheIsStale =
         !report.fema_feature_count ||
@@ -3888,12 +3889,12 @@ export default function ReportDetail({ reportId, onBack, isPublic = false }: Rep
         !report.nwi_feature_count ||
         report.nwi_feature_count === 0;
       if (cacheIsStale) {
-        console.log('[pipeline] cache stale — no overlay data, skipping cache');
-        // fall through to full pipeline
+        console.log('[pipeline] cache stale — no overlay data, running full pipeline');
         runPipeline(report);
         return;
       }
-      console.log('[pipeline] cache valid — loading scores from cache');
+      console.log('[pipeline] cache valid — loading boundary from DB, skipping pipeline');
+      pipelineRanRef.current = report.id;
       setPipeline({ step1: 'done', step2: 'done', step3: 'done', error: '' });
       const stored = report.parcels?.boundary_geojson;
       const src = report.parcels?.boundary_source ?? null;
@@ -3904,7 +3905,6 @@ export default function ReportDetail({ reportId, onBack, isPublic = false }: Rep
         setIsBboxFallback(!isReal);
         setBoundarySource(src);
       }
-      // Do NOT return — map must still load and set mapLayersReady via applyFullOverlay
     } else {
       runPipeline(report);
     }
