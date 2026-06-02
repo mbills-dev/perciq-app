@@ -22,6 +22,7 @@ interface SoilResult {
   nrcs_septic_rating: string | null;
   depth_water_table: number | null; // inches
   ksat_low: number | null;
+  ksat_r: number | null;
   ksat_high: number | null;
   slope_low: number | null;
   slope_high: number | null;
@@ -101,7 +102,7 @@ function scoreKsat(ksat: number | null, lenient = false): { pts: number; note: s
   if (ksat === null) {
     return { pts: 50, note: "Saturated hydraulic conductivity (Ksat) data not available — using neutral score" };
   }
-  const lo = lenient ? ksat * 1.4 : ksat; // alt systems treat Ksat 40% more leniently
+  const lo = lenient ? ksat * 1.4 : ksat;
   let pts: number;
   let note: string;
   if (lo >= 1.0 && lo <= 6.0) {
@@ -113,11 +114,18 @@ function scoreKsat(ksat: number | null, lenient = false): { pts: number; note: s
   } else if (lo > 6.0 && lo <= 20.0) {
     pts = 40;
     note = `Ksat is ${ksat.toFixed(2)} µm/s — moderately fast permeability; effluent treatment may be reduced`;
-  } else {
+  } else if (lo > 20.0 && lo <= 150.0) {
+    // Coarse sandy soils (e.g. Candor sand, ~42–141 µm/s) fall here. These are approvable
+    // in NC and similar states with pump dosing / pressure distribution — not unsuitable.
+    pts = 25;
+    note = `Ksat is ${ksat.toFixed(2)} µm/s — fast permeability (coarse sand); conventional gravity systems unlikely but pump/pressure-dosed systems are typically approvable`;
+  } else if (lo < 0.4) {
     pts = 10;
-    note = ksat < 0.4
-      ? `Ksat is ${ksat.toFixed(2)} µm/s — very slow permeability; soil is likely clay-dominated and unsuitable for conventional drainfields`
-      : `Ksat is ${ksat.toFixed(2)} µm/s — very fast permeability; inadequate effluent treatment likely`;
+    note = `Ksat is ${ksat.toFixed(2)} µm/s — very slow permeability; soil is likely clay-dominated and unsuitable for conventional drainfields`;
+  } else {
+    // > 150 µm/s — gravel/cobble, no treatment capacity
+    pts = 10;
+    note = `Ksat is ${ksat.toFixed(2)} µm/s — extremely fast permeability; inadequate effluent treatment, engineered system required`;
   }
   if (lenient && pts < 100) {
     pts = Math.min(100, pts + 20);
@@ -293,8 +301,9 @@ function scoreComponent(r: SoilResult, lenientAlt: boolean): ComponentScore {
   const nrcs = scoreNrcs(r.nrcs_septic_rating);
   explanations.push(nrcs.note);
 
-  // Use ksat_high as primary representative value (worst-case for the component horizon)
-  const ksatVal = r.ksat_high ?? r.ksat_low;
+  // Use ksat_r (representative value) — the correct field for scoring septic suitability.
+  // ksat_high is the theoretical maximum and produces unfairly low scores for sandy soils.
+  const ksatVal = r.ksat_r ?? r.ksat_high ?? r.ksat_low;
   const ksatConv = scoreKsat(ksatVal, false);
   const ksatAlt = scoreKsat(ksatVal, lenientAlt);
   explanations.push(ksatConv.note);

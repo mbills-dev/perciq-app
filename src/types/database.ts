@@ -78,6 +78,7 @@ export interface SoilResult {
   nrcs_septic_rating: string | null;
   depth_water_table: number | null;
   ksat_low: number | null;
+  ksat_r: number | null;
   ksat_high: number | null;
   slope_low: number | null;
   slope_high: number | null;

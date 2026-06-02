@@ -423,6 +423,7 @@ Deno.serve(async (req: Request) => {
       nrcs_septic_rating: row.septic_rating,
       depth_water_table: row.resdept_r,
       ksat_low: row.ksat_l,
+      ksat_r: row.ksat_r,
       ksat_high: row.ksat_h,
       slope_low: row.slope_l,
       slope_high: row.slope_h,
