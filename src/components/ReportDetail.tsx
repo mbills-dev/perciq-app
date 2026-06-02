@@ -4809,7 +4809,7 @@ export default function ReportDetail({ reportId, onBack, isPublic = false }: Rep
   return (
     <div className="flex flex-col md:flex-row overflow-hidden" style={{ height: 'calc(100vh - 3.5rem)' }}>
       {/* Map — single instance, responsive: 250px tall full-width on mobile, 60% wide full-height on desktop */}
-      <div className="w-full shrink-0 md:w-[60%] md:h-full" style={{ height: '250px' }} data-mobile-map>
+      <div className="w-full shrink-0 md:w-[60%] h-[250px] md:h-full" data-mobile-map>
         <div className="w-full h-full">
           <MapPanel
             reportId={reportId}
