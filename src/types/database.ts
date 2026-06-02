@@ -61,6 +61,7 @@ export interface Report {
   fema_feature_count: number | null;
   nwi_feature_count: number | null;
   report_data: Record<string, unknown> | null;
+  overlay_geojson: { femaFeatures: unknown[]; nwiFeatures: unknown[] } | null;
   created_at: string;
   parcels?: Parcel;
   soil_results?: SoilResult[];

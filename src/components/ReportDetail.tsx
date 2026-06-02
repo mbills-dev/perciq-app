@@ -1369,6 +1369,8 @@ function MapPanel({ parcelBoundary, isBboxFallback, boundarySource, soilResults,
   const soilResultsCountRef = useRef(0);
   // Holds the latest soilResults array so an in-flight scoring run can re-score with fresh data after it yields.
   const latestSoilResultsRef = useRef<SoilResult[]>([]);
+  // Holds the latest report object so applyFullOverlay can read overlay_geojson without stale closures.
+  const latestReportRef = useRef<Report | null>(null);
   const retrySoilLoadRef = useRef<(() => void) | null>(null);
   // Prevents zone selection from running more than once per parcel load
   const bestZoneRef = useRef<{ zones: BestZone[]; isFallbackZone: boolean } | null>(null);
@@ -1481,148 +1483,177 @@ function MapPanel({ parcelBoundary, isBboxFallback, boundarySource, soilResults,
       console.log('[boundary] original Regrid coords:', g.type === 'Polygon' ? g.coordinates[0].length : g.coordinates[0][0].length);
     }
 
-    try {
-      // For SDA WKT queries, MultiPolygon must be reduced to a single POLYGON.
-      // Extract the largest sub-polygon by area and use it for the query boundary.
-      // The full MultiPolygon is still used for mask, outline, and FEMA/NWI clipping.
-      let queryParcelFeature: turf.Feature<turf.Polygon | turf.MultiPolygon> = originalParcelFeature;
-      const isMultiPolygon = originalParcelFeature.geometry.type === 'MultiPolygon';
-      if (isMultiPolygon) {
-        const subPolygons = (originalParcelFeature.geometry.coordinates as number[][][][]).map(
-          coords => turf.polygon(coords)
+    // ── SOIL POLYGON CACHE: reconstruct soilFeatures from stored soil_polygon_geojson ──
+    // soil-query already saves the polygon GeoJSON for each mukey when it runs. On re-opens
+    // we can skip the soil-polygons edge function entirely if every result has geometry stored.
+    const allHaveCachedPolygons = results.length > 0 &&
+      results.every(r => r.soil_polygon_geojson != null);
+
+    if (allHaveCachedPolygons) {
+      console.log('[sda tabular] using cached soil_polygon_geojson from DB — skipping soil-polygons fetch');
+      for (const r of results) {
+        try {
+          const geo = r.soil_polygon_geojson as Record<string, unknown>;
+          const mukey = r.map_unit_key ?? '';
+          const muname = r.map_unit_name ?? '';
+          // geo may be a Feature or a raw Polygon/MultiPolygon geometry
+          const feature = geo.type === 'Feature'
+            ? turf.feature(
+                (geo.geometry ?? geo) as turf.Polygon | turf.MultiPolygon,
+                { mukey, musym: mukey, muname, ...(geo.properties as Record<string, unknown> ?? {}) }
+              )
+            : turf.feature(geo as unknown as turf.Polygon | turf.MultiPolygon, { mukey, musym: mukey, muname });
+          soilFeatures.push(feature);
+        } catch (e) {
+          console.warn('[sda tabular] failed to reconstruct cached polygon for', r.map_unit_key, e);
+        }
+      }
+      console.log('[sda tabular] reconstructed', soilFeatures.length, 'soil features from cache');
+    } else {
+      // ── LIVE FETCH from soil-polygons edge function (first analysis or cache missing) ──
+      try {
+        // For SDA WKT queries, MultiPolygon must be reduced to a single POLYGON.
+        // Extract the largest sub-polygon by area and use it for the query boundary.
+        // The full MultiPolygon is still used for mask, outline, and FEMA/NWI clipping.
+        let queryParcelFeature: turf.Feature<turf.Polygon | turf.MultiPolygon> = originalParcelFeature;
+        const isMultiPolygon = originalParcelFeature.geometry.type === 'MultiPolygon';
+        if (isMultiPolygon) {
+          const subPolygons = (originalParcelFeature.geometry.coordinates as number[][][][]).map(
+            coords => turf.polygon(coords)
+          );
+          const largest = subPolygons.reduce((best, cur) =>
+            turf.area(cur) > turf.area(best) ? cur : best
+          );
+          queryParcelFeature = largest;
+          console.log('[boundary] MultiPolygon detected —', subPolygons.length, 'sub-polygons, using largest (', turf.area(largest).toFixed(0), 'sqm) for SDA query');
+        }
+
+        // For MultiPolygon parcels use bbox WKT for the WFS soil-polygons fetch so ALL sub-polygons
+        // are covered. Client-side clipping below filters results to the actual parcel boundary.
+        const wfsQueryWKT = isMultiPolygon
+          ? buildBboxWkt(parcelBoundary)
+          : geojsonToWkt(queryParcelFeature as unknown as Record<string, unknown>);
+        const originalWKT = wfsQueryWKT;
+        const origArea = turf.area(isMultiPolygon ? originalParcelFeature : queryParcelFeature);
+        const MAX_WKT_LENGTH = 800;
+
+        // Find a valid simplified WKT: no self-intersections, area within 5% of original.
+        // Finer tolerances first so we keep as much detail as possible.
+        let parcelWKT = originalWKT;
+        let usedSimplified = false;
+
+        if (originalWKT.length > MAX_WKT_LENGTH) {
+          const tolerances = [0.00005, 0.0001, 0.0002, 0.0005, 0.001, 0.002, 0.005, 0.01];
+          for (const tolerance of tolerances) {
+            try {
+              const candidate = turf.simplify(queryParcelFeature, { tolerance, highQuality: true });
+              const candidateWKT = geojsonToWkt(candidate as unknown as Record<string, unknown>);
+              const hasKinks = turf.kinks(candidate as turf.Feature<turf.Polygon>).features.length > 0;
+              const areaRatio = turf.area(candidate) / origArea;
+              const areaOk = areaRatio >= 0.90 && areaRatio <= 1.10;
+              console.log('[ssurgo] tolerance:', tolerance, 'length:', candidateWKT.length, 'kinks:', hasKinks, 'areaRatio:', areaRatio.toFixed(3));
+              if (!hasKinks && areaOk && candidateWKT.length < originalWKT.length) {
+                parcelWKT = candidateWKT;
+                usedSimplified = true;
+                if (parcelWKT.length <= MAX_WKT_LENGTH) break;
+              }
+            } catch { console.warn('[ssurgo] simplify failed at tolerance:', tolerance); }
+          }
+        }
+        console.log('[ssurgo] original:', originalWKT.length, 'using:', usedSimplified ? `simplified (${parcelWKT.length})` : 'original');
+        console.log('[sda tabular] posting WKT query via edge function, parcel WKT length:', parcelWKT.length);
+        const { data: { session } } = await supabase.auth.getSession();
+
+        const parcelBboxForQuery = turf.bbox(originalParcelFeature) as [number, number, number, number];
+        const makeSDAFetch = (wkt: string) => withTimeout(
+          fetch(`${import.meta.env.VITE_SUPABASE_URL}/functions/v1/soil-polygons`, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'Authorization': `Bearer ${session?.access_token ?? import.meta.env.VITE_SUPABASE_ANON_KEY}`,
+              'Apikey': import.meta.env.VITE_SUPABASE_ANON_KEY,
+            },
+            body: JSON.stringify({ wkt, bbox: parcelBboxForQuery }),
+          }),
+          90_000, 'sda-tabular'
         );
-        const largest = subPolygons.reduce((best, cur) =>
-          turf.area(cur) > turf.area(best) ? cur : best
-        );
-        queryParcelFeature = largest;
-        console.log('[boundary] MultiPolygon detected —', subPolygons.length, 'sub-polygons, using largest (', turf.area(largest).toFixed(0), 'sqm) for SDA query');
-      }
 
-      // For MultiPolygon parcels use bbox WKT for the WFS soil-polygons fetch so ALL sub-polygons
-      // are covered. Client-side clipping below filters results to the actual parcel boundary.
-      const wfsQueryWKT = isMultiPolygon
-        ? buildBboxWkt(parcelBoundary)
-        : geojsonToWkt(queryParcelFeature as unknown as Record<string, unknown>);
-      const originalWKT = wfsQueryWKT;
-      const origArea = turf.area(isMultiPolygon ? originalParcelFeature : queryParcelFeature);
-      const MAX_WKT_LENGTH = 800;
-
-      // Find a valid simplified WKT: no self-intersections, area within 5% of original.
-      // Finer tolerances first so we keep as much detail as possible.
-      let parcelWKT = originalWKT;
-      let usedSimplified = false;
-
-      if (originalWKT.length > MAX_WKT_LENGTH) {
-        const tolerances = [0.00005, 0.0001, 0.0002, 0.0005, 0.001, 0.002, 0.005, 0.01];
-        for (const tolerance of tolerances) {
-          try {
-            const candidate = turf.simplify(queryParcelFeature, { tolerance, highQuality: true });
-            const candidateWKT = geojsonToWkt(candidate as unknown as Record<string, unknown>);
-            const hasKinks = turf.kinks(candidate as turf.Feature<turf.Polygon>).features.length > 0;
-            const areaRatio = turf.area(candidate) / origArea;
-            const areaOk = areaRatio >= 0.90 && areaRatio <= 1.10;
-            console.log('[ssurgo] tolerance:', tolerance, 'length:', candidateWKT.length, 'kinks:', hasKinks, 'areaRatio:', areaRatio.toFixed(3));
-            if (!hasKinks && areaOk && candidateWKT.length < originalWKT.length) {
-              parcelWKT = candidateWKT;
-              usedSimplified = true;
-              if (parcelWKT.length <= MAX_WKT_LENGTH) break;
-            }
-          } catch { console.warn('[ssurgo] simplify failed at tolerance:', tolerance); }
-        }
-      }
-      console.log('[ssurgo] original:', originalWKT.length, 'using:', usedSimplified ? `simplified (${parcelWKT.length})` : 'original');
-      console.log('[sda tabular] posting WKT query via edge function, parcel WKT length:', parcelWKT.length);
-      const { data: { session } } = await supabase.auth.getSession();
-
-      const parcelBboxForQuery = turf.bbox(originalParcelFeature) as [number, number, number, number];
-      const makeSDAFetch = (wkt: string) => withTimeout(
-        fetch(`${import.meta.env.VITE_SUPABASE_URL}/functions/v1/soil-polygons`, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'Authorization': `Bearer ${session?.access_token ?? import.meta.env.VITE_SUPABASE_ANON_KEY}`,
-            'Apikey': import.meta.env.VITE_SUPABASE_ANON_KEY,
-          },
-          body: JSON.stringify({ wkt, bbox: parcelBboxForQuery }),
-        }),
-        90_000, 'sda-tabular'
-      );
-
-      const fetchWithRetry = async (wkt: string): Promise<Response | null> => {
-        for (let attempt = 0; attempt < 2; attempt++) {
-          try {
-            if (attempt > 0) {
-              console.log('[sda tabular] retrying after timeout...');
-              setSdaRetrying(true);
-              await new Promise(r => setTimeout(r, 2000));
-            }
-            const resp = await makeSDAFetch(wkt);
-            setSdaRetrying(false);
-            return resp;
-          } catch (err) {
-            console.warn(`[sda tabular] attempt ${attempt + 1} failed:`, (err as Error).message);
-            setSdaRetrying(false);
-          }
-        }
-        return null;
-      };
-
-      type SDAFeature = { properties: { mukey: string; musym: string; muname: string }; geometry: unknown };
-      const parseSDAFeatures = (resp: Response): Promise<SDAFeature[]> =>
-        resp.json().then((j: { features?: SDAFeature[] }) => j.features ?? []);
-
-      let sdaResp = await fetchWithRetry(parcelWKT);
-
-      if (sdaResp === null) {
-        setSdaError(true);
-      } else {
-        setSdaError(false);
-        console.log('[sda tabular] status:', sdaResp.status);
-        if (sdaResp.ok) {
-          let features = await parseSDAFeatures(sdaResp);
-          console.log('[sda tabular] features:', features.length);
-
-          // FIX 3: if simplified polygon returned 0 features, retry with original boundary
-          if (features.length === 0 && usedSimplified) {
-            console.log('[ssurgo] zero features with simplified polygon — retrying with original boundary');
-            const retryResp = await fetchWithRetry(originalWKT);
-            if (retryResp?.ok) {
-              features = await parseSDAFeatures(retryResp);
-              console.log('[ssurgo] original boundary retry features:', features.length);
+        const fetchWithRetry = async (wkt: string): Promise<Response | null> => {
+          for (let attempt = 0; attempt < 2; attempt++) {
+            try {
+              if (attempt > 0) {
+                console.log('[sda tabular] retrying after timeout...');
+                setSdaRetrying(true);
+                await new Promise(r => setTimeout(r, 2000));
+              }
+              const resp = await makeSDAFetch(wkt);
+              setSdaRetrying(false);
+              return resp;
+            } catch (err) {
+              console.warn(`[sda tabular] attempt ${attempt + 1} failed:`, (err as Error).message);
+              setSdaRetrying(false);
             }
           }
+          return null;
+        };
 
-          const uniqueMukeys = new Set<string>();
-          for (const f of features) {
-            const { mukey, musym, muname } = f.properties;
-            if (!mukey) continue;
-            uniqueMukeys.add(mukey);
-            soilFeatures.push(turf.feature(f.geometry as turf.Polygon, { mukey, musym, muname }));
-          }
-          console.log('[ssurgo] mukeys returned:', uniqueMukeys.size, [...uniqueMukeys]);
-          console.log('[sda tabular] parsed features:', soilFeatures.length);
+        type SDAFeature = { properties: { mukey: string; musym: string; muname: string }; geometry: unknown };
+        const parseSDAFeatures = (resp: Response): Promise<SDAFeature[]> =>
+          resp.json().then((j: { features?: SDAFeature[] }) => j.features ?? []);
 
-          if (soilFeatures.length > 0) {
-            const allBboxes = soilFeatures.map(f => turf.bbox(f));
-            const lngs0 = allBboxes.map(b => b[0]), lngs2 = allBboxes.map(b => b[2]);
-            const lats1 = allBboxes.map(b => b[1]), lats3 = allBboxes.map(b => b[3]);
-            console.log('[wfs] extent of returned features:',
-              Math.min(...lngs0).toFixed(4), Math.min(...lats1).toFixed(4),
-              Math.max(...lngs2).toFixed(4), Math.max(...lats3).toFixed(4));
-            const pb = turf.bbox(originalParcelFeature);
-            console.log('[wfs] parcel bbox:',
-              pb[0].toFixed(4), pb[1].toFixed(4), pb[2].toFixed(4), pb[3].toFixed(4));
-            const mukeyFeatureCount = soilFeatures.reduce((acc, f) => {
-              const mk = String((f.properties as Record<string,unknown>)?.mukey ?? 'unknown');
-              acc[mk] = (acc[mk] ?? 0) + 1;
-              return acc;
-            }, {} as Record<string, number>);
-            console.log('[wfs] feature count by mukey:', JSON.stringify(mukeyFeatureCount));
+        let sdaResp = await fetchWithRetry(parcelWKT);
+
+        if (sdaResp === null) {
+          setSdaError(true);
+        } else {
+          setSdaError(false);
+          console.log('[sda tabular] status:', sdaResp.status);
+          if (sdaResp.ok) {
+            let features = await parseSDAFeatures(sdaResp);
+            console.log('[sda tabular] features:', features.length);
+
+            // FIX 3: if simplified polygon returned 0 features, retry with original boundary
+            if (features.length === 0 && usedSimplified) {
+              console.log('[ssurgo] zero features with simplified polygon — retrying with original boundary');
+              const retryResp = await fetchWithRetry(originalWKT);
+              if (retryResp?.ok) {
+                features = await parseSDAFeatures(retryResp);
+                console.log('[ssurgo] original boundary retry features:', features.length);
+              }
+            }
+
+            const uniqueMukeys = new Set<string>();
+            for (const f of features) {
+              const { mukey, musym, muname } = f.properties;
+              if (!mukey) continue;
+              uniqueMukeys.add(mukey);
+              soilFeatures.push(turf.feature(f.geometry as turf.Polygon, { mukey, musym, muname }));
+            }
+            console.log('[ssurgo] mukeys returned:', uniqueMukeys.size, [...uniqueMukeys]);
+            console.log('[sda tabular] parsed features:', soilFeatures.length);
+
+            if (soilFeatures.length > 0) {
+              const allBboxes = soilFeatures.map(f => turf.bbox(f));
+              const lngs0 = allBboxes.map(b => b[0]), lngs2 = allBboxes.map(b => b[2]);
+              const lats1 = allBboxes.map(b => b[1]), lats3 = allBboxes.map(b => b[3]);
+              console.log('[wfs] extent of returned features:',
+                Math.min(...lngs0).toFixed(4), Math.min(...lats1).toFixed(4),
+                Math.max(...lngs2).toFixed(4), Math.max(...lats3).toFixed(4));
+              const pb = turf.bbox(originalParcelFeature);
+              console.log('[wfs] parcel bbox:',
+                pb[0].toFixed(4), pb[1].toFixed(4), pb[2].toFixed(4), pb[3].toFixed(4));
+              const mukeyFeatureCount = soilFeatures.reduce((acc, f) => {
+                const mk = String((f.properties as Record<string,unknown>)?.mukey ?? 'unknown');
+                acc[mk] = (acc[mk] ?? 0) + 1;
+                return acc;
+              }, {} as Record<string, number>);
+              console.log('[wfs] feature count by mukey:', JSON.stringify(mukeyFeatureCount));
+            }
           }
         }
+      } catch (e) {
+        console.warn('[sda tabular] fetch failed:', (e as Error).message);
       }
-    } catch (e) {
-      console.warn('[sda tabular] fetch failed:', (e as Error).message);
     }
 
     console.log('[zones] using REAL soil polygons:', soilFeatures.length);
@@ -1631,45 +1662,7 @@ function MapPanel({ parcelBoundary, isBboxFallback, boundarySource, soilResults,
     const [minLng, minLat, maxLng, maxLat] = turf.bbox(originalParcelFeature);
     const parcelArea = turf.area(originalParcelFeature);
 
-    // ── Fetch NWI + FEMA in parallel — direct Esri ArcGIS REST (CORS-enabled) ─
-    const femaParams = new URLSearchParams({
-      geometry: `${minLng},${minLat},${maxLng},${maxLat}`,
-      geometryType: 'esriGeometryEnvelope',
-      inSR: '4326',
-      spatialRel: 'esriSpatialRelIntersects',
-      where: "FLD_ZONE IN ('A','AE','AH','AO','VE','V')",
-      outFields: 'FLD_ZONE,SFHA_TF',
-      returnGeometry: 'true',
-      outSR: '4326',
-      resultRecordCount: '500',
-      f: 'geojson',
-    });
-    const femaUrl = `https://services.arcgis.com/P3ePLMYs2RVChkJx/arcgis/rest/services/USA_Flood_Hazard_Reduced_Set_gdb/FeatureServer/0/query?${femaParams}`;
-
-    const nwiParams = new URLSearchParams({
-      geometry: `${minLng},${minLat},${maxLng},${maxLat}`,
-      geometryType: 'esriGeometryEnvelope',
-      inSR: '4326',
-      spatialRel: 'esriSpatialRelIntersects',
-      where: '1=1',
-      outFields: 'ATTRIBUTE,WETLAND_TYPE',
-      returnGeometry: 'true',
-      outSR: '4326',
-      resultRecordCount: '500',
-      f: 'geojson',
-    });
-    const nwiUrl = `https://services.arcgis.com/P3ePLMYs2RVChkJx/arcgis/rest/services/USA_Wetlands/FeatureServer/0/query?${nwiParams}`;
-
-    console.log('[fema] arcgis url:', femaUrl.slice(0, 120));
-    console.log('[nwi]  arcgis url:', nwiUrl.slice(0, 120));
-    console.log('[overlay] reached Promise.allSettled — about to fetch fema and nwi');
-    const [nwiResult, femaResult] = await Promise.allSettled([
-      fetch(nwiUrl, { signal: AbortSignal.timeout(15_000) }),
-      fetch(femaUrl, { signal: AbortSignal.timeout(15_000) }),
-    ]);
-    console.log('[overlay] Promise.allSettled completed, nwiResult status:', nwiResult.status, 'femaResult status:', femaResult.status);
-
-    // Clip helper
+    // Clip helper — shared by live fetch and cache restore paths
     const clipToParcel = (f: turf.Feature): turf.Feature<turf.Polygon | turf.MultiPolygon> | null => {
       try {
         if (!f?.geometry) return null;
@@ -1686,58 +1679,139 @@ function MapPanel({ parcelBoundary, isBboxFallback, boundarySource, soilResults,
     let nwiRawCount = 0;
     let femaRawCount = 0;
 
-    if (nwiResult.status === 'fulfilled') {
-      try {
-        console.log('[nwi] response status:', nwiResult.value.status);
-        const nwiData = await nwiResult.value.json() as { features?: turf.Feature[] };
-        const nwiCount = nwiData.features?.length ?? 0;
-        nwiRawCount = nwiCount;
-        console.log('[nwi] raw feature count:', nwiCount);
-        if (nwiCount === 0) console.log('[nwi] full response:', JSON.stringify(nwiData).slice(0, 200));
-        for (const f of nwiData.features ?? []) {
-          const clipped = clipToParcel(f);
-          if (clipped) wetlandFeatures.push(clipped);
-        }
-        console.log('[nwi] clipped wetland polygons:', wetlandFeatures.length);
-        const wetlandArea = wetlandFeatures.reduce((s, f) => s + turf.area(f), 0);
-        nwiPct = Math.round((wetlandArea / parcelArea) * 100);
-        console.log('[nwi] wetland coverage:', nwiPct + '%');
-      } catch (e) { console.warn('[nwi] parse error:', (e as Error).message); }
+    // ── FEMA/NWI CACHE: load clipped features from reports.overlay_geojson ──────
+    const cachedOverlay = latestReportRef.current?.overlay_geojson;
+    if (cachedOverlay && Array.isArray(cachedOverlay.femaFeatures) && Array.isArray(cachedOverlay.nwiFeatures)) {
+      console.log('[overlay] loading FEMA/NWI from cache — skipping Esri fetch');
+
+      for (const f of cachedOverlay.nwiFeatures as turf.Feature[]) {
+        try {
+          const feat = f as turf.Feature<turf.Polygon | turf.MultiPolygon>;
+          if (feat?.geometry) wetlandFeatures.push(feat);
+        } catch { /* skip */ }
+      }
+      const wetlandArea = wetlandFeatures.reduce((s, f) => s + turf.area(f), 0);
+      nwiPct = Math.round((wetlandArea / parcelArea) * 100);
+      nwiRawCount = wetlandFeatures.length;
+
+      const zoneCounts: Record<string, number> = {};
+      for (const f of cachedOverlay.femaFeatures as turf.Feature[]) {
+        try {
+          const feat = f as turf.Feature<turf.Polygon | turf.MultiPolygon>;
+          if (feat?.geometry) {
+            const zone = (feat.properties as Record<string, unknown>)?.FLD_ZONE as string ?? '';
+            floodFeatures.push(feat);
+            zoneCounts[zone] = (zoneCounts[zone] ?? 0) + turf.area(feat);
+          }
+        } catch { /* skip */ }
+      }
+      const floodArea = floodFeatures.reduce((s, f) => s + turf.area(f), 0);
+      floodPct = Math.round((floodArea / parcelArea) * 100);
+      femaRawCount = floodFeatures.length;
+      dominantFloodZone = Object.entries(zoneCounts).sort((a, b) => b[1] - a[1])[0]?.[0] ?? '';
+
+      console.log('[overlay] cache restored — fema:', femaRawCount, 'nwi:', nwiRawCount);
     } else {
-      console.warn('[nwi] unavailable:', nwiResult.reason);
+      // ── LIVE FETCH from Esri ArcGIS REST (first analysis or cache missing) ─────
+      const femaParams = new URLSearchParams({
+        geometry: `${minLng},${minLat},${maxLng},${maxLat}`,
+        geometryType: 'esriGeometryEnvelope',
+        inSR: '4326',
+        spatialRel: 'esriSpatialRelIntersects',
+        where: "FLD_ZONE IN ('A','AE','AH','AO','VE','V')",
+        outFields: 'FLD_ZONE,SFHA_TF',
+        returnGeometry: 'true',
+        outSR: '4326',
+        resultRecordCount: '500',
+        f: 'geojson',
+      });
+      const femaUrl = `https://services.arcgis.com/P3ePLMYs2RVChkJx/arcgis/rest/services/USA_Flood_Hazard_Reduced_Set_gdb/FeatureServer/0/query?${femaParams}`;
+
+      const nwiParams = new URLSearchParams({
+        geometry: `${minLng},${minLat},${maxLng},${maxLat}`,
+        geometryType: 'esriGeometryEnvelope',
+        inSR: '4326',
+        spatialRel: 'esriSpatialRelIntersects',
+        where: '1=1',
+        outFields: 'ATTRIBUTE,WETLAND_TYPE',
+        returnGeometry: 'true',
+        outSR: '4326',
+        resultRecordCount: '500',
+        f: 'geojson',
+      });
+      const nwiUrl = `https://services.arcgis.com/P3ePLMYs2RVChkJx/arcgis/rest/services/USA_Wetlands/FeatureServer/0/query?${nwiParams}`;
+
+      console.log('[fema] arcgis url:', femaUrl.slice(0, 120));
+      console.log('[nwi]  arcgis url:', nwiUrl.slice(0, 120));
+      console.log('[overlay] reached Promise.allSettled — about to fetch fema and nwi');
+      const [nwiResult, femaResult] = await Promise.allSettled([
+        fetch(nwiUrl, { signal: AbortSignal.timeout(15_000) }),
+        fetch(femaUrl, { signal: AbortSignal.timeout(15_000) }),
+      ]);
+      console.log('[overlay] Promise.allSettled completed, nwiResult status:', nwiResult.status, 'femaResult status:', femaResult.status);
+
+      if (nwiResult.status === 'fulfilled') {
+        try {
+          console.log('[nwi] response status:', nwiResult.value.status);
+          const nwiData = await nwiResult.value.json() as { features?: turf.Feature[] };
+          const nwiCount = nwiData.features?.length ?? 0;
+          nwiRawCount = nwiCount;
+          console.log('[nwi] raw feature count:', nwiCount);
+          if (nwiCount === 0) console.log('[nwi] full response:', JSON.stringify(nwiData).slice(0, 200));
+          for (const f of nwiData.features ?? []) {
+            const clipped = clipToParcel(f);
+            if (clipped) wetlandFeatures.push(clipped);
+          }
+          console.log('[nwi] clipped wetland polygons:', wetlandFeatures.length);
+          const wetlandArea = wetlandFeatures.reduce((s, f) => s + turf.area(f), 0);
+          nwiPct = Math.round((wetlandArea / parcelArea) * 100);
+          console.log('[nwi] wetland coverage:', nwiPct + '%');
+        } catch (e) { console.warn('[nwi] parse error:', (e as Error).message); }
+      } else {
+        console.warn('[nwi] unavailable:', nwiResult.reason);
+      }
+
+      if (femaResult.status === 'fulfilled') {
+        try {
+          if (!femaResult.value.ok) throw new Error(`FEMA status: ${femaResult.value.status}`);
+          const femaData = await femaResult.value.json() as { features?: turf.Feature[]; error?: { message?: string } };
+          if (femaData.error) throw new Error(`FEMA error: ${femaData.error.message ?? JSON.stringify(femaData.error)}`);
+          const femaCount = femaData.features?.length ?? 0;
+          femaRawCount = femaCount;
+          console.log('[fema] flood zone features:', femaCount);
+          if (femaCount === 0) console.log('[fema] full response:', JSON.stringify(femaData).slice(0, 200));
+          const zoneCounts: Record<string, number> = {};
+          for (const f of femaData.features ?? []) {
+            const zone = (f.properties as Record<string, unknown>)?.FLD_ZONE as string ?? '';
+            const clipped = clipToParcel(f);
+            if (clipped) {
+              clipped.properties = { ...clipped.properties, FLD_ZONE: zone };
+              floodFeatures.push(clipped);
+              zoneCounts[zone] = (zoneCounts[zone] ?? 0) + turf.area(clipped);
+            }
+          }
+          const floodArea = floodFeatures.reduce((s, f) => s + turf.area(f), 0);
+          floodPct = Math.round((floodArea / parcelArea) * 100);
+          dominantFloodZone = Object.entries(zoneCounts).sort((a, b) => b[1] - a[1])[0]?.[0] ?? '';
+          console.log('[fema] flood zone coverage:', floodPct + '%', 'zone:', dominantFloodZone);
+        } catch (e) {
+          console.warn('[fema] fetch failed:', (e as Error).message);
+        }
+      } else {
+        console.warn('[fema] request rejected:', femaResult.reason);
+      }
+
+      // Persist clipped features to DB so future opens skip Esri entirely
+      supabase.from('reports').update({
+        overlay_geojson: { femaFeatures: floodFeatures, nwiFeatures: wetlandFeatures },
+      }).eq('id', reportId).then(({ error }) => {
+        if (error) console.warn('[overlay] failed to cache overlay_geojson:', error.message);
+        else console.log('[overlay] cached fema/nwi to reports.overlay_geojson');
+      });
     }
+
     nwiRenderedRef.current = true;
     setNwiReadyRef.current(true);
-
-    if (femaResult.status === 'fulfilled') {
-      try {
-        if (!femaResult.value.ok) throw new Error(`FEMA status: ${femaResult.value.status}`);
-        const femaData = await femaResult.value.json() as { features?: turf.Feature[]; error?: { message?: string } };
-        if (femaData.error) throw new Error(`FEMA error: ${femaData.error.message ?? JSON.stringify(femaData.error)}`);
-        const femaCount = femaData.features?.length ?? 0;
-        femaRawCount = femaCount;
-        console.log('[fema] flood zone features:', femaCount);
-        if (femaCount === 0) console.log('[fema] full response:', JSON.stringify(femaData).slice(0, 200));
-        const zoneCounts: Record<string, number> = {};
-        for (const f of femaData.features ?? []) {
-          const zone = (f.properties as Record<string, unknown>)?.FLD_ZONE as string ?? '';
-          const clipped = clipToParcel(f);
-          if (clipped) {
-            clipped.properties = { ...clipped.properties, FLD_ZONE: zone };
-            floodFeatures.push(clipped);
-            zoneCounts[zone] = (zoneCounts[zone] ?? 0) + turf.area(clipped);
-          }
-        }
-        const floodArea = floodFeatures.reduce((s, f) => s + turf.area(f), 0);
-        floodPct = Math.round((floodArea / parcelArea) * 100);
-        dominantFloodZone = Object.entries(zoneCounts).sort((a, b) => b[1] - a[1])[0]?.[0] ?? '';
-        console.log('[fema] flood zone coverage:', floodPct + '%', 'zone:', dominantFloodZone);
-      } catch (e) {
-        console.warn('[fema] fetch failed:', (e as Error).message);
-      }
-    } else {
-      console.warn('[fema] request rejected:', femaResult.reason);
-    }
     femaRenderedRef.current = true;
     setFemaReadyRef.current(true);
 
@@ -3439,6 +3513,7 @@ export default function ReportDetail({ reportId, onBack, isPublic = false }: Rep
     ]);
     const r = rep as Report | null;
     setReport(r);
+    latestReportRef.current = r;
     setSoilResults((soil as SoilResult[]) ?? []);
     if (r?.parcels?.state && r.parcels.county) {
       const { data: rule } = await supabase.from('county_rules').select('*')
