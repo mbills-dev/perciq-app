@@ -1148,6 +1148,8 @@ interface SoilHoverData {
 }
 
 interface MapPanelProps {
+  reportId: string;
+  cachedOverlayGeojson: { femaFeatures: unknown[]; nwiFeatures: unknown[] } | null;
   parcelBoundary: Record<string, unknown> | null;
   isBboxFallback: boolean;
   boundarySource: string | null;
@@ -1278,7 +1280,7 @@ function fitToBoundary(map: mapboxgl.Map, boundary: Record<string, unknown>) {
   } catch (_) { /* ignore */ }
 }
 
-function MapPanel({ parcelBoundary, isBboxFallback, boundarySource, soilResults, lat, lng, onMapReady, onCoverageUpdate, onSoilPolygonsReady, onAllLayersReady, onCanvasReady, onBestZoneInFlood, onPercFallback, onPercPinsReady, onTokenReady, onSoilHover, onSoilClick, activeTab }: MapPanelProps) {
+function MapPanel({ reportId, cachedOverlayGeojson, parcelBoundary, isBboxFallback, boundarySource, soilResults, lat, lng, onMapReady, onCoverageUpdate, onSoilPolygonsReady, onAllLayersReady, onCanvasReady, onBestZoneInFlood, onPercFallback, onPercPinsReady, onTokenReady, onSoilHover, onSoilClick, activeTab }: MapPanelProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<mapboxgl.Map | null>(null);
   const markerRef = useRef<mapboxgl.Marker | null>(null);
@@ -1369,8 +1371,6 @@ function MapPanel({ parcelBoundary, isBboxFallback, boundarySource, soilResults,
   const soilResultsCountRef = useRef(0);
   // Holds the latest soilResults array so an in-flight scoring run can re-score with fresh data after it yields.
   const latestSoilResultsRef = useRef<SoilResult[]>([]);
-  // Holds the latest report object so applyFullOverlay can read overlay_geojson without stale closures.
-  const latestReportRef = useRef<Report | null>(null);
   const retrySoilLoadRef = useRef<(() => void) | null>(null);
   // Prevents zone selection from running more than once per parcel load
   const bestZoneRef = useRef<{ zones: BestZone[]; isFallbackZone: boolean } | null>(null);
@@ -1680,7 +1680,7 @@ function MapPanel({ parcelBoundary, isBboxFallback, boundarySource, soilResults,
     let femaRawCount = 0;
 
     // ── FEMA/NWI CACHE: load clipped features from reports.overlay_geojson ──────
-    const cachedOverlay = latestReportRef.current?.overlay_geojson;
+    const cachedOverlay = cachedOverlayGeojson;
     if (cachedOverlay && Array.isArray(cachedOverlay.femaFeatures) && Array.isArray(cachedOverlay.nwiFeatures)) {
       console.log('[overlay] loading FEMA/NWI from cache — skipping Esri fetch');
 
@@ -3513,7 +3513,6 @@ export default function ReportDetail({ reportId, onBack, isPublic = false }: Rep
     ]);
     const r = rep as Report | null;
     setReport(r);
-    latestReportRef.current = r;
     setSoilResults((soil as SoilResult[]) ?? []);
     if (r?.parcels?.state && r.parcels.county) {
       const { data: rule } = await supabase.from('county_rules').select('*')
@@ -4761,6 +4760,8 @@ export default function ReportDetail({ reportId, onBack, isPublic = false }: Rep
       <div className="block" style={{ height: '250px', flexShrink: 0 }} data-mobile-map>
         <div className="md:hidden w-full h-full">
           <MapPanel
+            reportId={reportId}
+            cachedOverlayGeojson={report?.overlay_geojson ?? null}
             parcelBoundary={activeBoundary}
             isBboxFallback={isBboxFallback}
             boundarySource={boundarySource}
@@ -4789,6 +4790,8 @@ export default function ReportDetail({ reportId, onBack, isPublic = false }: Rep
       </div>
       <div className="hidden md:block" style={{ width: '60%', height: '100%', flexShrink: 0 }}>
         <MapPanel
+          reportId={reportId}
+          cachedOverlayGeojson={report?.overlay_geojson ?? null}
           parcelBoundary={activeBoundary}
           isBboxFallback={isBboxFallback}
           boundarySource={boundarySource}
