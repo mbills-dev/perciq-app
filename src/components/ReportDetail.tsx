@@ -1484,19 +1484,17 @@ function MapPanel({ reportId, cachedOverlayGeojson, parcelBoundary, isBboxFallba
     }
 
     // ── SOIL POLYGON CACHE: reconstruct soilFeatures from stored soil_polygon_geojson ──
-    // soil-query already saves the polygon GeoJSON for each mukey when it runs. On re-opens
-    // we can skip the soil-polygons edge function entirely if every result has geometry stored.
-    const allHaveCachedPolygons = results.length > 0 &&
-      results.every(r => r.soil_polygon_geojson != null);
-
-    if (allHaveCachedPolygons) {
+    // soil-query saves polygon GeoJSON for each mukey at analysis time. On re-opens, skip the
+    // soil-polygons WFS fetch entirely — use stored geometry where available, skip rows without.
+    if (results.length > 0) {
       console.log('[sda tabular] using cached soil_polygon_geojson from DB — skipping soil-polygons fetch');
+      let cached = 0, missing = 0;
       for (const r of results) {
         try {
-          const geo = r.soil_polygon_geojson as Record<string, unknown>;
+          const geo = r.soil_polygon_geojson as Record<string, unknown> | null;
           const mukey = r.map_unit_key ?? '';
           const muname = r.map_unit_name ?? '';
-          // geo may be a Feature or a raw Polygon/MultiPolygon geometry
+          if (!geo) { missing++; continue; }
           const feature = geo.type === 'Feature'
             ? turf.feature(
                 (geo.geometry ?? geo) as turf.Polygon | turf.MultiPolygon,
@@ -1504,11 +1502,13 @@ function MapPanel({ reportId, cachedOverlayGeojson, parcelBoundary, isBboxFallba
               )
             : turf.feature(geo as unknown as turf.Polygon | turf.MultiPolygon, { mukey, musym: mukey, muname });
           soilFeatures.push(feature);
+          cached++;
         } catch (e) {
           console.warn('[sda tabular] failed to reconstruct cached polygon for', r.map_unit_key, e);
+          missing++;
         }
       }
-      console.log('[sda tabular] reconstructed', soilFeatures.length, 'soil features from cache');
+      console.log('[sda tabular] reconstructed', cached, 'soil features from cache,', missing, 'had no geometry');
     } else {
       // ── LIVE FETCH from soil-polygons edge function (first analysis or cache missing) ──
       try {
@@ -3883,12 +3883,10 @@ export default function ReportDetail({ reportId, onBack, isPublic = false }: Rep
     // Guard: only act once per report ID regardless of how many times state updates cause re-fires
     if (pipelineRanRef.current === report.id) return;
     if (report.status === 'complete' && report.conventional_score !== null) {
-      const cacheIsStale =
-        !report.fema_feature_count ||
-        report.fema_feature_count === 0 ||
-        !report.nwi_feature_count ||
-        report.nwi_feature_count === 0;
-      if (cacheIsStale) {
+      // Cache is valid if we have overlay data (either the new overlay_geojson or legacy fema/nwi counts)
+      const hasOverlayCache = report.overlay_geojson != null ||
+        (report.fema_feature_count != null && report.nwi_feature_count != null);
+      if (!hasOverlayCache) {
         console.log('[pipeline] cache stale — no overlay data, running full pipeline');
         runPipeline(report);
         return;
@@ -4756,9 +4754,9 @@ export default function ReportDetail({ reportId, onBack, isPublic = false }: Rep
 
   return (
     <div className="flex flex-col md:flex-row overflow-hidden" style={{ height: 'calc(100vh - 3.5rem)' }}>
-      {/* Map — full width on mobile (250px tall), 60% on desktop */}
-      <div className="block" style={{ height: '250px', flexShrink: 0 }} data-mobile-map>
-        <div className="md:hidden w-full h-full">
+      {/* Map — single instance, responsive: 250px tall full-width on mobile, 60% wide full-height on desktop */}
+      <div className="w-full shrink-0 md:w-[60%] md:h-full" style={{ height: '250px' }} data-mobile-map>
+        <div className="w-full h-full">
           <MapPanel
             reportId={reportId}
             cachedOverlayGeojson={report?.overlay_geojson ?? null}
@@ -4770,11 +4768,22 @@ export default function ReportDetail({ reportId, onBack, isPublic = false }: Rep
             lng={parcel?.lng ?? null}
             onMapReady={(map) => {
               mapRef.current = map;
-              console.log('MAP READY (mobile) — stored reference');
+              console.log('MAP READY — stored reference');
             }}
             onCoverageUpdate={handleCoverageUpdate}
             onSoilPolygonsReady={setMapSoilPolygons}
-            onAllLayersReady={() => setMapLayersReady(true)}
+            onAllLayersReady={() => {
+              console.log('[map] all layers ready — overlay dismissed');
+              setMapLayersReady(true);
+              const canvas = mapRef.current?.getCanvas();
+              if (canvas) {
+                try {
+                  mapSnapshotRef.current = canvas.toDataURL('image/jpeg', 0.92);
+                } catch (e) {
+                  console.warn('[map] snapshot failed:', e);
+                }
+              }
+            }}
             onCanvasReady={(canvas) => { mapCanvasRef.current = canvas; }}
             onBestZoneInFlood={setBestZoneInFloodWarning}
             onPercFallback={(exhausted) => setPercFallbackWarning(exhausted ? 'exhausted' : 'expanded')}
@@ -4787,47 +4796,6 @@ export default function ReportDetail({ reportId, onBack, isPublic = false }: Rep
             activeTab={activeTab}
           />
         </div>
-      </div>
-      <div className="hidden md:block" style={{ width: '60%', height: '100%', flexShrink: 0 }}>
-        <MapPanel
-          reportId={reportId}
-          cachedOverlayGeojson={report?.overlay_geojson ?? null}
-          parcelBoundary={activeBoundary}
-          isBboxFallback={isBboxFallback}
-          boundarySource={boundarySource}
-          soilResults={soilResults}
-          lat={parcel?.lat ?? null}
-          lng={parcel?.lng ?? null}
-          onMapReady={(map) => {
-            mapRef.current = map;
-            console.log('MAP READY — stored reference');
-          }}
-          onCoverageUpdate={handleCoverageUpdate}
-          onSoilPolygonsReady={setMapSoilPolygons}
-          onAllLayersReady={() => {
-            console.log('[map] all layers ready — overlay dismissed');
-            setMapLayersReady(true);
-            // Snapshot the live canvas while all layers are rendered — used by report export
-            const canvas = mapRef.current?.getCanvas();
-            if (canvas) {
-              try {
-                mapSnapshotRef.current = canvas.toDataURL('image/jpeg', 0.92);
-              } catch (e) {
-                console.warn('[map] snapshot failed:', e);
-              }
-            }
-          }}
-          onCanvasReady={(canvas) => { mapCanvasRef.current = canvas; }}
-          onBestZoneInFlood={setBestZoneInFloodWarning}
-          onPercFallback={(exhausted) => setPercFallbackWarning(exhausted ? 'exhausted' : 'expanded')}
-          onPercPinsReady={(pins) => { percPinsRef.current = pins; }}
-          onTokenReady={(token) => { mapboxTokenRef.current = token; }}
-          onSoilHover={setHudHover}
-          onSoilClick={(data) => {
-            setHudLocked(prev => prev?.mukey === data.mukey ? null : data);
-          }}
-          activeTab={activeTab}
-        />
       </div>
       {/* Right panel: on mobile full-width scrollable, on desktop fixed 40% */}
       <div className="bg-navy-800 md:border-l border-t md:border-t-0 border-white/5 flex flex-col w-full md:w-auto md:flex-none overflow-y-auto" style={{ '--panel-w': '40%' } as React.CSSProperties}>
