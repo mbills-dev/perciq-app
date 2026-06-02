@@ -1484,9 +1484,13 @@ function MapPanel({ reportId, cachedOverlayGeojson, parcelBoundary, isBboxFallba
     }
 
     // ── SOIL POLYGON CACHE: reconstruct soilFeatures from stored soil_polygon_geojson ──
-    // soil-query saves polygon GeoJSON for each mukey at analysis time. On re-opens, skip the
-    // soil-polygons WFS fetch entirely — use stored geometry where available, skip rows without.
-    if (results.length > 0) {
+    // Geometry is saved to soil_results after the first live WFS fetch. On re-opens, skip the
+    // soil-polygons edge function call if every result has geometry stored. If any are missing,
+    // fall through to the live fetch — a fresh fetch is better than rendering zero polygons.
+    const anyCachedGeometry = results.some(r => r.soil_polygon_geojson != null);
+    const allHaveGeometry = results.length > 0 && results.every(r => r.soil_polygon_geojson != null);
+
+    if (allHaveGeometry) {
       console.log('[sda tabular] using cached soil_polygon_geojson from DB — skipping soil-polygons fetch');
       let cached = 0, missing = 0;
       for (const r of results) {
@@ -1495,13 +1499,24 @@ function MapPanel({ reportId, cachedOverlayGeojson, parcelBoundary, isBboxFallba
           const mukey = r.map_unit_key ?? '';
           const muname = r.map_unit_name ?? '';
           if (!geo) { missing++; continue; }
-          const feature = geo.type === 'Feature'
-            ? turf.feature(
-                (geo.geometry ?? geo) as turf.Polygon | turf.MultiPolygon,
-                { mukey, musym: mukey, muname, ...(geo.properties as Record<string, unknown> ?? {}) }
-              )
-            : turf.feature(geo as unknown as turf.Polygon | turf.MultiPolygon, { mukey, musym: mukey, muname });
-          soilFeatures.push(feature);
+          if (geo.type === 'FeatureCollection') {
+            // Multiple fragments stored — push each as a separate feature
+            const fc = geo as unknown as turf.FeatureCollection;
+            for (const f of fc.features) {
+              soilFeatures.push(turf.feature(
+                f.geometry as turf.Polygon | turf.MultiPolygon,
+                { mukey, musym: mukey, muname, ...(f.properties ?? {}) }
+              ));
+            }
+          } else {
+            const feature = geo.type === 'Feature'
+              ? turf.feature(
+                  (geo.geometry ?? geo) as turf.Polygon | turf.MultiPolygon,
+                  { mukey, musym: mukey, muname, ...(geo.properties as Record<string, unknown> ?? {}) }
+                )
+              : turf.feature(geo as unknown as turf.Polygon | turf.MultiPolygon, { mukey, musym: mukey, muname });
+            soilFeatures.push(feature);
+          }
           cached++;
         } catch (e) {
           console.warn('[sda tabular] failed to reconstruct cached polygon for', r.map_unit_key, e);
@@ -1510,6 +1525,9 @@ function MapPanel({ reportId, cachedOverlayGeojson, parcelBoundary, isBboxFallba
       }
       console.log('[sda tabular] reconstructed', cached, 'soil features from cache,', missing, 'had no geometry');
     } else {
+      if (anyCachedGeometry) {
+        console.log('[sda tabular] partial cache — some geometries missing, fetching fresh from WFS');
+      }
       // ── LIVE FETCH from soil-polygons edge function (first analysis or cache missing) ──
       try {
         // For SDA WKT queries, MultiPolygon must be reduced to a single POLYGON.
@@ -1654,6 +1672,42 @@ function MapPanel({ reportId, cachedOverlayGeojson, parcelBoundary, isBboxFallba
       } catch (e) {
         console.warn('[sda tabular] fetch failed:', (e as Error).message);
       }
+    }
+
+    // ── PERSIST SOIL POLYGON GEOMETRY: save WFS geometry back to soil_results for future cache hits ──
+    // Only runs after a live fetch (when cache was missing). Fire-and-forget — does not block rendering.
+    if (!allHaveGeometry && soilFeatures.length > 0) {
+      // Group features by mukey — a single mukey can have multiple polygon features (fragmented soil units).
+      // We merge them into a GeometryCollection so all fragments are preserved in one DB row.
+      const geomByMukey: Record<string, turf.Feature[]> = {};
+      for (const f of soilFeatures) {
+        const mk = String((f.properties as Record<string, unknown>)?.mukey ?? '');
+        if (!mk) continue;
+        if (!geomByMukey[mk]) geomByMukey[mk] = [];
+        geomByMukey[mk].push(f);
+      }
+
+      const saveGeometries = async () => {
+        const { data: { session } } = await supabase.auth.getSession();
+        if (!session) return;
+        for (const [mukey, features] of Object.entries(geomByMukey)) {
+          try {
+            // Store as FeatureCollection so multiple fragments per mukey are preserved
+            const storedGeo = features.length === 1
+              ? features[0].geometry
+              : { type: 'FeatureCollection', features };
+            await supabase
+              .from('soil_results')
+              .update({ soil_polygon_geojson: storedGeo as unknown as Record<string, unknown> })
+              .eq('report_id', reportId)
+              .eq('map_unit_key', mukey);
+          } catch (e) {
+            console.warn('[sda tabular] failed to persist geometry for mukey', mukey, e);
+          }
+        }
+        console.log('[sda tabular] persisted geometry for', Object.keys(geomByMukey).length, 'mukeys');
+      };
+      saveGeometries().catch(e => console.warn('[sda tabular] geometry persist error:', e));
     }
 
     console.log('[zones] using REAL soil polygons:', soilFeatures.length);

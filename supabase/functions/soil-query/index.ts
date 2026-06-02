@@ -407,53 +407,8 @@ Deno.serve(async (req: Request) => {
       return jsonResp({ report_id, soil_units: [], message: "No SSURGO data intersects this parcel" });
     }
 
-    // ── Fetch soil polygon geometries for each mukey ─────────────────────────
-    const mukeys = [...new Set(rows.map((r) => r.mukey))];
-    const polygonByMukey: Record<string, Record<string, unknown> | null> = {};
-
-    try {
-      const polyParams = new URLSearchParams();
-      const mukeyList = mukeys.map((k) => `'${k}'`).join(",");
-      polyParams.append(
-        "query",
-        `SELECT mukey, mupolygongeo FROM mapunit WHERE mukey IN (${mukeyList})`
-      );
-      polyParams.append("format", "JSON+COLUMNNAME");
-
-      console.log("[soil-query] fetching polygons for mukeys:", mukeyList);
-      const polyResp = await withTimeout(
-        fetch(SDA_URL, {
-          method: "POST",
-          headers: { "Content-Type": "application/x-www-form-urlencoded" },
-          body: polyParams.toString(),
-        }),
-        30_000
-      );
-      const polyText = await polyResp.text();
-      const polyJson = JSON.parse(polyText) as { Table?: unknown[][] };
-      const polyTable = polyJson.Table ?? [];
-
-      if (polyTable.length > 1) {
-        const headers = polyTable[0] as string[];
-        const mukeyIdx = headers.indexOf("mukey");
-        const geoIdx = headers.indexOf("mupolygongeo");
-        for (const row of polyTable.slice(1)) {
-          const mk = String(row[mukeyIdx]);
-          const wktGeo = row[geoIdx];
-          if (wktGeo && typeof wktGeo === "string" && wktGeo.startsWith("POLYGON")) {
-            // Convert WKT POLYGON to GeoJSON
-            polygonByMukey[mk] = wktPolygonToGeojson(wktGeo);
-          } else {
-            polygonByMukey[mk] = null;
-          }
-        }
-        console.log("[soil-query] polygon geometries fetched:", Object.keys(polygonByMukey).length);
-      }
-    } catch (e) {
-      console.warn("[soil-query] polygon fetch failed (non-fatal):", (e as Error).message);
-    }
-
     // Save soil results — clear existing rows unless appending (subsequent sub-polygon queries).
+    // soil_polygon_geojson is populated later by the frontend after the WFS fetch completes.
     if (!append_results) {
       await serviceClient.from("soil_results").delete().eq("report_id", report_id);
     }
@@ -473,7 +428,6 @@ Deno.serve(async (req: Request) => {
       slope_high: row.slope_h,
       pct_coverage: row.comppct_r,
       raw_ssurgo: row as unknown as Record<string, unknown>,
-      soil_polygon_geojson: polygonByMukey[row.mukey] ?? null,
     }));
 
     const { error: insertErr } = await serviceClient.from("soil_results").insert(soilInserts);
