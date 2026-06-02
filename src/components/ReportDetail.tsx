@@ -158,13 +158,12 @@ function scoreSoilPolygon(
   // ── Factor B: Ksat (25%) ─────────────────────────────────────────────────
   const ksatScore = (() => {
     if (ksat === null) return 50;
-    if (ksat >= 10 && ksat <= 40) return 95;
-    if (ksat >= 4 && ksat < 10) return 80;
-    if (ksat >= 1 && ksat < 4) return 65;
-    if (ksat >= 40 && ksat <= 100) return 55;
-    if (ksat > 100) return 30;
-    if (ksat >= 0.1 && ksat < 1) return 20;
-    return 5; // < 0.1 — too slow
+    if (ksat >= 1.0 && ksat <= 6.0) return 100;   // ideal range
+    if (ksat >= 0.4 && ksat < 1.0) return 60;     // slightly slow
+    if (ksat > 6.0 && ksat <= 20.0) return 40;    // moderately fast
+    if (ksat > 20.0 && ksat <= 150.0) return 25;  // fast (coarse sand) — approvable with pump dosing
+    if (ksat < 0.4) return 10;                    // very slow — clay dominated
+    return 10;                                    // > 150 µm/s — gravel, no treatment capacity
   })();
 
   // ── Factor C: Slope (20%) ────────────────────────────────────────────────
@@ -557,7 +556,7 @@ function generateSummary(
     : 'has moderate drainage';
 
   // Permeability note
-  const ksat = dominant?.ksat_high ?? dominant?.ksat_low ?? null;
+  const ksat = dominant?.ksat_r ?? dominant?.ksat_high ?? dominant?.ksat_low ?? null;
   let permPhrase = '';
   if (ksat !== null) {
     if (ksat > 14) permPhrase = 'Permeability is faster than ideal, which can reduce effluent treatment effectiveness.';
@@ -914,7 +913,7 @@ async function buildSoilPolygons(
         clipped.properties = {
           ...clipped.properties,
           drainagecl: result.drainage_class ?? props.drainagecl,
-          ksat_r: result.ksat_high ?? props.ksat_r,
+          ksat_r: result.ksat_r ?? result.ksat_high ?? props.ksat_r,
           ksat_h: result.ksat_high ?? props.ksat_h,
           ksat_l: result.ksat_low ?? props.ksat_l,
           slope_h: result.slope_high ?? props.slope_h,

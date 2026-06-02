@@ -1259,14 +1259,14 @@ export interface RawPolygonProps {
   [key: string]: unknown;
 }
 
-export function buildSeriesSummary(polygons: Array<{ mukey: string; geojson: { properties: RawPolygonProps }; bucket: string; result: { map_unit_name?: string | null; map_unit_key?: string | null; drainage_class?: string | null; ksat_high?: number | null } | null }>): SeriesData[] {
+export function buildSeriesSummary(polygons: Array<{ mukey: string; geojson: { properties: RawPolygonProps }; bucket: string; result: { map_unit_name?: string | null; map_unit_key?: string | null; drainage_class?: string | null; ksat_r?: number | null; ksat_high?: number | null } | null }>): SeriesData[] {
   const seriesMap = new Map<string, SeriesData>();
   for (const poly of polygons) {
     const props = poly.geojson.properties;
     const muname = (props.muname ?? poly.result?.map_unit_name ?? 'Unknown') as string;
     const musym = (props.musym ?? poly.result?.map_unit_key ?? '') as string;
     const drainage = (props.drainagecl ?? props.drain ?? props.drainageclass ?? poly.result?.drainage_class ?? '') as string;
-    const ksat = parseFloat(String(props.ksat_r || props.ksat_h || poly.result?.ksat_high || 0)) || 0;
+    const ksat = parseFloat(String(props.ksat_r || props.ksat_h || poly.result?.ksat_r || poly.result?.ksat_high || 0)) || 0;
     const score = (props.suitabilityScore as number) ?? 0;
 
     if (!seriesMap.has(muname)) {
