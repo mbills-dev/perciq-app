@@ -52,22 +52,44 @@ interface PipelineState {
 
 function scoreColor(score: number | null): string {
   if (score === null) return '#6B7280';
-  if (score > 65) return '#22C55E';
-  if (score >= 35) return '#F59E0B';
+  if (score >= 65) return '#22C55E';
+  if (score >= 40) return '#F59E0B';
   return '#EF4444';
 }
 
 function scoreLabel(score: number | null): string {
   if (score === null) return 'Pending';
-  if (score > 65) return 'Suitable';
-  if (score >= 35) return 'Marginal';
+  if (score >= 65) return 'Suitable';
+  if (score >= 40) return 'Marginal';
   return 'Unsuitable';
 }
 
 
 const _loggedBucketMukeys = new Set<string>();
 
-// ─── Soil scoring engine (4-factor weighted) ─────────────────────────────────
+// ─── Gating ceiling constants — tune here; logic is separate ─────────────────
+// Each value is the maximum SI Score allowed when that condition is true.
+// A gate only lowers the score; it never raises it.
+// These thresholds must match the Site Alert conditions so a critical alert
+// can never coexist with a Viable (>=65) score.
+const GATE_CEIL = {
+  WATER_TABLE_VERY_SHALLOW: 39,  // seasonal water table < 18 in  (< 45.72 cm)
+  WATER_TABLE_SHALLOW:      55,  // seasonal water table 18–24 in (45.72–60.96 cm)
+  WATER_TABLE_MODERATE:     64,  // seasonal water table 24–36 in (60.96–91.44 cm)
+  BEDROCK_SHALLOW:          39,  // lithic / paralithic / cemented bedrock < 20 in (< 50.8 cm)
+  CLAY_SHALLOW:             50,  // clay or non-bedrock restriction < 20 in — mound/LPP may work
+  RESTRICTION_MODERATE:     64,  // any restriction 20–36 in (50.8–91.44 cm)
+  FLOODING_FREQUENT:        39,  // SSURGO flodfreqcl "frequent" or "very frequent"
+  FEMA_FLOOD_HIGH:          39,  // FEMA 100-yr flood spatial overlap > 25%
+  FEMA_FLOOD_MODERATE:      64,  // FEMA 100-yr flood spatial overlap 10–25%
+  WETLAND_HIGH:             39,  // NWI wetland spatial overlap > 25%
+  WETLAND_MODERATE:         64,  // NWI wetland spatial overlap 10–25%
+  KSAT_EXTREME:             39,  // ksat < 0.4 or > 150 µm/s
+  SLOPE_SEVERE:             39,  // slope > 30%
+  SLOPE_STEEP:              64,  // slope 15–30%
+} as const;
+
+// ─── Soil scoring engine (gated limiting-factor model) ────────────────────────
 
 function getOverlapPercent(
   poly: turf.Feature<turf.Polygon | turf.MultiPolygon>,
@@ -95,6 +117,8 @@ function getOverlapPercent(
 
 interface SoilScore {
   finalScore: number;
+  qualityComposite: number;  // weighted average before gating — raw soil-quality signal
+  ceiling: number;           // lowest gate ceiling that fired (100 = no gate)
   bucket: SoilBucket;
   drainageScore: number;
   ksatScore: number;
@@ -103,6 +127,8 @@ interface SoilScore {
   pondingScore: number | null;
   restrictiveLayerScore: number | null;
   floodingScore: number | null;
+  floodOverlapPct: number;
+  wetlandOverlapPct: number;
 }
 
 function scoreSoilPolygon(
@@ -237,46 +263,118 @@ function scoreSoilPolygon(
     return 100;
   })();
 
-  // ── Base score ───────────────────────────────────────────────────────────
-  const baseScore = (drainageScore * 0.35) + (ksatScore * 0.25) + (slopeScore * 0.20) + (watertableScore * 0.20);
+  // ── Quality composite: weighted average of the 4 soil-quality factors ────
+  // This is the "how good is this soil" signal. Multipliers are gone — all
+  // limiting conditions are handled as hard ceilings below.
+  const qualityComposite = (drainageScore * 0.35) + (ksatScore * 0.25) + (slopeScore * 0.20) + (watertableScore * 0.20);
 
-  console.log('[score] mukey:', mukey,
-    'drainage:', drainageScore, 'ksat:', ksatScore,
-    'slope:', slopeScore, 'watertable:', watertableScore,
-    'ponding:', pondingScore, 'resdept:', restrictiveLayerScore, 'flooding:', floodingScore,
-    'base:', baseScore.toFixed(1));
+  // ── Spatial overlays (needed for gating and display) ────────────────────
+  const floodOverlap   = (floodUnion   || floodFeatures.length)
+    ? getOverlapPercent(geojson, floodUnion, floodFeatures) : 0;
+  const wetlandOverlap = (wetlandUnion || wetlandFeatures.length)
+    ? getOverlapPercent(geojson, wetlandUnion, wetlandFeatures) : 0;
 
-  // ── Overlay penalties ────────────────────────────────────────────────────
-  const floodOverlap = (floodUnion || floodFeatures.length) ? getOverlapPercent(geojson, floodUnion, floodFeatures) : 0;
-  const wetlandOverlap = (wetlandUnion || wetlandFeatures.length) ? getOverlapPercent(geojson, wetlandUnion, wetlandFeatures) : 0;
-  const floodPenalty = floodOverlap > 0 ? Math.max(0.25, 1 - (floodOverlap * 0.70)) : 1.0;
-  const wetlandPenalty = wetlandOverlap > 0 ? Math.max(0.05, 1 - (wetlandOverlap * 0.90)) : 1.0;
+  // ── Gating ceiling: each limiting condition fires a cap; lowest wins ────
+  let ceiling = 100;
+  const firedGates: string[] = [];
 
-  // SSURGO ponding/flooding multipliers — null = no penalty; capped at max 15% and 10% reduction
-  const pondingMultiplier  = pondingScore  !== null ? Math.max(0.85, pondingScore  / 100) : 1.0;
-  const floodingMultiplier = floodingScore !== null ? Math.max(0.90, floodingScore / 100) : 1.0;
-  // Restrictive layer (resdept / clay horizon) does NOT multiply finalScore.
-  // A shallow restriction fires a Site Alert; it is displayed via the factor bar but does not
-  // collapse the composite — the composite + site alert together convey the correct picture.
+  // Water table gate — watertable in cm (SSURGO wtdepannmin)
+  if (watertable !== null) {
+    if (watertable < 45.72) {
+      ceiling = Math.min(ceiling, GATE_CEIL.WATER_TABLE_VERY_SHALLOW);
+      firedGates.push(`wt<18in→${GATE_CEIL.WATER_TABLE_VERY_SHALLOW}`);
+    } else if (watertable < 60.96) {
+      ceiling = Math.min(ceiling, GATE_CEIL.WATER_TABLE_SHALLOW);
+      firedGates.push(`wt18-24in→${GATE_CEIL.WATER_TABLE_SHALLOW}`);
+    } else if (watertable < 91.44) {
+      ceiling = Math.min(ceiling, GATE_CEIL.WATER_TABLE_MODERATE);
+      firedGates.push(`wt24-36in→${GATE_CEIL.WATER_TABLE_MODERATE}`);
+    }
+  }
 
-  const finalScore = Math.round(baseScore * floodPenalty * wetlandPenalty * pondingMultiplier * floodingMultiplier);
+  // Restrictive layer gate — effectiveResdeptCm in cm; reskind splits bedrock vs clay
+  if (effectiveResdeptCm !== null && !isNaN(effectiveResdeptCm)) {
+    const BEDROCK_KINDS = ['bedrock', 'lithic', 'paralithic', 'fragipan', 'duripan', 'cemented', 'ortstein', 'permafrost'];
+    const isBedrock = reskind !== null && BEDROCK_KINDS.some(k => reskind.toLowerCase().includes(k));
+    if (effectiveResdeptCm < 50.8) {                // < 20 in
+      const cap = isBedrock ? GATE_CEIL.BEDROCK_SHALLOW : GATE_CEIL.CLAY_SHALLOW;
+      ceiling = Math.min(ceiling, cap);
+      firedGates.push(`restr<20in(${isBedrock ? 'bedrock' : 'clay'})→${cap}`);
+    } else if (effectiveResdeptCm < 91.44) {         // 20–36 in
+      ceiling = Math.min(ceiling, GATE_CEIL.RESTRICTION_MODERATE);
+      firedGates.push(`restr20-36in→${GATE_CEIL.RESTRICTION_MODERATE}`);
+    }
+  }
+
+  // SSURGO flooding frequency gate
+  if (flodfreqcl !== null) {
+    const f = flodfreqcl.toLowerCase();
+    if (f === 'frequent' || f === 'very frequent') {
+      ceiling = Math.min(ceiling, GATE_CEIL.FLOODING_FREQUENT);
+      firedGates.push(`flodfreq→${GATE_CEIL.FLOODING_FREQUENT}`);
+    }
+  }
+
+  // FEMA 100-yr flood spatial overlap gate
+  if (floodOverlap > 0.25) {
+    ceiling = Math.min(ceiling, GATE_CEIL.FEMA_FLOOD_HIGH);
+    firedGates.push(`fema>25%→${GATE_CEIL.FEMA_FLOOD_HIGH}`);
+  } else if (floodOverlap > 0.10) {
+    ceiling = Math.min(ceiling, GATE_CEIL.FEMA_FLOOD_MODERATE);
+    firedGates.push(`fema10-25%→${GATE_CEIL.FEMA_FLOOD_MODERATE}`);
+  }
+
+  // NWI wetland spatial overlap gate
+  if (wetlandOverlap > 0.25) {
+    ceiling = Math.min(ceiling, GATE_CEIL.WETLAND_HIGH);
+    firedGates.push(`wetland>25%→${GATE_CEIL.WETLAND_HIGH}`);
+  } else if (wetlandOverlap > 0.10) {
+    ceiling = Math.min(ceiling, GATE_CEIL.WETLAND_MODERATE);
+    firedGates.push(`wetland10-25%→${GATE_CEIL.WETLAND_MODERATE}`);
+  }
+
+  // ksat extreme gate
+  if (ksat !== null && (ksat < 0.4 || ksat > 150)) {
+    ceiling = Math.min(ceiling, GATE_CEIL.KSAT_EXTREME);
+    firedGates.push(`ksat_extreme→${GATE_CEIL.KSAT_EXTREME}`);
+  }
+
+  // Slope gate
+  if (slope !== null) {
+    if (slope > 30) {
+      ceiling = Math.min(ceiling, GATE_CEIL.SLOPE_SEVERE);
+      firedGates.push(`slope>30%→${GATE_CEIL.SLOPE_SEVERE}`);
+    } else if (slope > 15) {
+      ceiling = Math.min(ceiling, GATE_CEIL.SLOPE_STEEP);
+      firedGates.push(`slope15-30%→${GATE_CEIL.SLOPE_STEEP}`);
+    }
+  }
+
+  const finalScore = Math.round(Math.min(qualityComposite, ceiling));
 
   // hasRealData: at least one SSURGO field came back with actual data (not just defaults)
   const hasRealData = ksat !== null || drainagecl !== null || watertable !== null || (resdept_r !== null && !isNaN(resdept_r));
 
   const bucket: SoilBucket = (() => {
     if (finalScore >= 65) return 'viable';
-    if (finalScore >= 35) return 'engineering-needed';
+    if (finalScore >= 40) return 'engineering-needed';
     if (finalScore > 0 || hasRealData) return 'not-suitable';
     return 'no-data';
   })();
 
   console.log('[score] mukey:', mukey,
-    'floodOverlap:', (floodOverlap * 100).toFixed(0) + '%',
-    'wetlandOverlap:', (wetlandOverlap * 100).toFixed(0) + '%',
-    'finalScore:', finalScore, 'bucket:', bucket);
+    'quality_composite:', qualityComposite.toFixed(1),
+    'ceiling:', ceiling,
+    'gates:', firedGates.length ? firedGates.join(' ') : 'none',
+    'final_SI:', finalScore, 'bucket:', bucket);
 
-  return { finalScore, bucket, drainageScore, ksatScore, slopeScore, watertableScore, pondingScore, restrictiveLayerScore, floodingScore, floodOverlapPct: Math.round(floodOverlap * 100), wetlandOverlapPct: Math.round(wetlandOverlap * 100) };
+  return {
+    finalScore, qualityComposite: Math.round(qualityComposite), ceiling, bucket,
+    drainageScore, ksatScore, slopeScore, watertableScore,
+    pondingScore, restrictiveLayerScore, floodingScore,
+    floodOverlapPct: Math.round(floodOverlap * 100),
+    wetlandOverlapPct: Math.round(wetlandOverlap * 100),
+  };
 }
 
 const BUCKET_FILL = {
@@ -4078,13 +4176,18 @@ export default function ReportDetail({ reportId, onBack, isPublic = false }: Rep
     }
     const baseParcelScore = totalArea > 0 ? weightedSum / totalArea : convScore;
 
-    const floodFrac = (envCoverage?.floodPct ?? 0) / 100;
-    const wetlandFrac = (envCoverage?.nwiPct ?? 0) / 100;
-    const floodPenalty = 1 - floodFrac * 0.75;
-    const wetlandPenalty = 1 - wetlandFrac * 0.85;
-    const parcelScore = Math.round(Math.min(100, Math.max(0, baseParcelScore * floodPenalty * wetlandPenalty)));
+    // Each polygon's finalScore already has flood/wetland gates baked in via
+    // scoreSoilPolygon — no additional penalty is applied here.
+    const parcelScore = Math.round(Math.min(100, Math.max(0, baseParcelScore)));
 
-    console.log('[score] weighted base:', baseParcelScore.toFixed(1), 'flood penalty:', floodPenalty.toFixed(2), 'wetland penalty:', wetlandPenalty.toFixed(2), 'final parcel score:', parcelScore);
+    // Invariant: Best Zone score = max(final_SI); Parcel Overall = area-weighted mean.
+    // max >= mean always — log a warning if violated.
+    if (zoneScore !== null && parcelScore !== null && zoneScore < parcelScore) {
+      console.warn('[score] INVARIANT VIOLATED: Best Zone', zoneScore, '< Parcel Overall', parcelScore);
+    } else {
+      console.log('[score] Best Zone:', zoneScore, '>= Parcel Overall:', parcelScore, '✓');
+    }
+    console.log('[score] parcel weighted base:', baseParcelScore.toFixed(1), 'final parcel score:', parcelScore);
 
     return { zoneScore, parcelScore };
   }, [report, scoreResult, mapSoilPolygons, envCoverage]);
