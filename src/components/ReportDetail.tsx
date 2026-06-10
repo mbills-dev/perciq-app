@@ -216,8 +216,10 @@ function scoreSoilPolygon(
     if (effectiveResdeptCm !== null && !isNaN(effectiveResdeptCm)) {
       if (effectiveResdeptCm > 150) return 100;
       if (effectiveResdeptCm >= 100) return 90;
-      if (effectiveResdeptCm >= 50) return 75;
-      return 0;
+      if (effectiveResdeptCm >= 50) return 75;   // ~20 in — min for most conventional systems
+      if (effectiveResdeptCm >= 36) return 20;   // ~14 in — severely limited, mound/alt needed
+      if (effectiveResdeptCm >= 18) return 10;   // ~7 in  — very shallow, few options
+      return 5;                                   // < 7 in — essentially none
     }
     // depth missing but a limiting layer type is recorded — neutral unknown, not "no problem"
     if (isLimitingKind) return 50;
@@ -4829,16 +4831,16 @@ export default function ReportDetail({ reportId, onBack, isPublic = false }: Rep
                   if (v >= 40) return { sev: 'warning',  text: 'Occasional ponding possible — evaluate buildable area.' };
                   return                { sev: 'critical', text: 'Frequent ponding likely — high risk for system failure.' };
                 }
-                if (label === 'Depth to rock') {
+                if (label === 'Depth to restriction') {
                   const isClayInferred = hudData.rawResdeptCm === null && hudData.clay40DepthCm !== null;
                   if (isClayInferred && hudData.clay40DepthCm !== null) {
                     const depthIn = Math.round(hudData.clay40DepthCm * 0.394);
                     if (v >= 75) return { sev: 'warning',  text: `Inferred clay restriction at ~${depthIn} inches — verify on site.` };
-                    return              { sev: 'critical', text: `Inferred clay restriction at ~${depthIn} inches — may limit drain field options.` };
+                    return              { sev: 'critical', text: `Inferred clay restriction at ~${depthIn} inches — conventional system unlikely without mound or alternative design.` };
                   }
                   if (v >= 80) return { sev: 'good',     text: 'No shallow restrictive layers detected.' };
-                  if (v >= 55) return { sev: 'warning',  text: 'Moderate depth to rock or saprolite — verify on site.' };
-                  return                { sev: 'critical', text: 'Shallow rock or saprolite — may limit drain field depth.' };
+                  if (v >= 55) return { sev: 'warning',  text: 'Moderate depth to restrictive layer — verify on site before testing.' };
+                  return                { sev: 'critical', text: 'Shallow restrictive layer — likely limits drain field depth.' };
                 }
                 if (label === 'Flooding') {
                   if (v >= 80) return { sev: 'good',     text: 'Flooding not expected — no concerns.' };
@@ -4862,7 +4864,7 @@ export default function ReportDetail({ reportId, onBack, isPublic = false }: Rep
                 { label: 'Slope',         value: hudData.slopeScore },
                 { label: 'Water table',   value: hudData.wtScore },
                 { label: 'Ponding',       value: hudData.pondingScore },
-                { label: 'Depth to rock', value: hudData.restrictiveLayerScore },
+                { label: 'Depth to restriction', value: hudData.restrictiveLayerScore },
                 { label: 'Flooding',      value: hudData.floodingScore },
               ];
               return (
