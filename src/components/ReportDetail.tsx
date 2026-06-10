@@ -4791,72 +4791,77 @@ export default function ReportDetail({ reportId, onBack, isPublic = false }: Rep
 
             {/* Soil factor bars */}
             {hudData && (() => {
+              type Sev = 'good' | 'warning' | 'critical';
               const NULL_COLOR = 'rgba(255,255,255,0.22)';
-              const verdictColor = (v: number | null) => v === null ? NULL_COLOR : v >= 80 ? '#22C55E' : v >= 55 ? '#FF9F09' : '#FF4539';
-              const verdictIcon  = (v: number | null) => v === null ? null : v >= 80 ? '✓' : '⚠';
-              const verdictText  = (label: string, v: number | null): string => {
-                const noData = 'No data available — field verification recommended';
+              const sevColor = (s: Sev) => s === 'good' ? '#22C55E' : s === 'warning' ? '#FF9F0A' : '#FF453A';
+              const sevIcon  = (s: Sev) => s === 'good' ? '✓' : '⚠';
+              // Score-only severity (for bar fill minimum)
+              const scoreSev = (v: number): Sev => v >= 75 ? 'good' : v >= 45 ? 'warning' : 'critical';
+              // Per-condition messages with explicit severity attached
+              const factorMsg = (label: string, v: number | null): { text: string; sev: Sev } | null => {
+                if (v === null) return null;
                 if (label === 'Drainage') {
-                  if (v === null) return noData;
-                  if (v >= 80) return 'Well drained — favorable conditions for septic.';
-                  if (v >= 65) return 'Somewhat excessively drained — drains freely, low saturation risk.';
-                  if (v >= 55) return 'Moderately well drained — adequate for most conventional systems.';
-                  return 'Poorly drained — high risk of system failure.';
+                  if (v >= 90) return { sev: 'good',     text: 'Well drained — favorable conditions for septic.' };
+                  if (v >= 75) return { sev: 'good',     text: 'Moderately well drained — adequate for most conventional systems.' };
+                  if (v >= 65) return { sev: 'warning',  text: 'Somewhat excessively drained — drains very fast; effluent may receive limited treatment. Verify perc rate isn\'t too rapid.' };
+                  if (v >= 45) return { sev: 'warning',  text: 'Somewhat poorly drained — seasonal saturation limits system options.' };
+                  return                { sev: 'critical', text: 'Poorly drained — high risk of system failure.' };
                 }
                 if (label === 'Permeability') {
-                  if (v === null) return noData;
-                  if (v >= 80) return 'Good permeability — ideal range for conventional absorption.';
-                  if (v >= 55) return 'Moderate-fast permeability — conventional systems generally approvable. Verify local design requirements.';
-                  return 'Low permeability — may require engineered system. Verify with local health department.';
+                  if (v >= 80) return { sev: 'good',     text: 'Good permeability — ideal range for conventional absorption.' };
+                  if (v >= 55) return { sev: 'warning',  text: 'Moderate-fast permeability — conventional systems generally approvable. Verify local design requirements.' };
+                  return                { sev: 'critical', text: 'Low permeability — may require engineered system. Verify with local health department.' };
                 }
                 if (label === 'Slope') {
-                  if (v === null) return noData;
-                  if (v >= 80) return 'Gentle slope — unlikely to constrain septic placement.';
-                  if (v >= 55) return 'Moderate slope — site-specific engineering may be needed.';
-                  return 'Steep slope — limits conventional drain field placement.';
+                  if (v >= 80) return { sev: 'good',     text: 'Gentle slope — unlikely to constrain septic placement.' };
+                  if (v >= 55) return { sev: 'warning',  text: 'Moderate slope — site-specific engineering may be needed.' };
+                  return                { sev: 'critical', text: 'Steep slope — limits conventional drain field placement.' };
                 }
                 if (label === 'Water table') {
-                  if (v === null) return noData;
-                  if (v >= 80) return 'Deep water table — no concerns for septic design.';
-                  if (v >= 55) return 'Moderate depth — worth investigating before testing.';
-                  return 'May be shallow — could affect septic design.';
+                  if (v >= 80) return { sev: 'good',     text: 'Deep water table — no concerns for septic design.' };
+                  if (v >= 55) return { sev: 'warning',  text: 'Moderate depth — worth investigating before testing.' };
+                  return                { sev: 'critical', text: 'Shallow water table — likely to affect septic design.' };
                 }
                 if (label === 'Ponding') {
-                  if (v === null) return noData;
-                  if (v >= 80) return 'Standing water not expected — favorable condition.';
-                  if (v >= 40) return 'Occasional ponding possible — evaluate buildable area.';
-                  return 'Frequent ponding likely — high risk for system failure.';
+                  if (v >= 80) return { sev: 'good',     text: 'Standing water not expected — favorable condition.' };
+                  if (v >= 40) return { sev: 'warning',  text: 'Occasional ponding possible — evaluate buildable area.' };
+                  return                { sev: 'critical', text: 'Frequent ponding likely — high risk for system failure.' };
                 }
                 if (label === 'Depth to rock') {
-                  if (v === null) return noData;
-                  // Clay-inferred restriction: resdept_r was null, clay horizon is the source
                   const isClayInferred = hudData.rawResdeptCm === null && hudData.clay40DepthCm !== null;
                   if (isClayInferred && hudData.clay40DepthCm !== null) {
                     const depthIn = Math.round(hudData.clay40DepthCm * 0.394);
-                    if (v >= 75) return `Inferred clay restriction at ~${depthIn} inches — verify on site.`;
-                    if (v >= 50) return `Inferred clay restriction at ~${depthIn} inches — verify on site.`;
-                    return `Inferred clay restriction at ~${depthIn} inches — may limit drain field options.`;
+                    if (v >= 75) return { sev: 'warning',  text: `Inferred clay restriction at ~${depthIn} inches — verify on site.` };
+                    return              { sev: 'critical', text: `Inferred clay restriction at ~${depthIn} inches — may limit drain field options.` };
                   }
-                  if (v >= 80) return 'No shallow restrictive layers detected.';
-                  if (v >= 55) return 'Moderate depth to rock or saprolite — verify on site.';
-                  return 'Shallow rock or saprolite — may limit drain field depth.';
+                  if (v >= 80) return { sev: 'good',     text: 'No shallow restrictive layers detected.' };
+                  if (v >= 55) return { sev: 'warning',  text: 'Moderate depth to rock or saprolite — verify on site.' };
+                  return                { sev: 'critical', text: 'Shallow rock or saprolite — may limit drain field depth.' };
                 }
                 if (label === 'Flooding') {
-                  if (v === null) return noData;
-                  if (v >= 80) return 'Flooding not expected — no concerns.';
-                  if (v >= 40) return 'Occasional flooding possible — verify buildable area.';
-                  return 'Frequent flooding — unsuitable for conventional septic.';
+                  if (v >= 80) return { sev: 'good',     text: 'Flooding not expected — no concerns.' };
+                  if (v >= 40) return { sev: 'warning',  text: 'Occasional flooding possible — verify buildable area.' };
+                  return                { sev: 'critical', text: 'Frequent flooding — unsuitable for conventional septic.' };
                 }
-                return '';
+                return null;
+              };
+              // Resolved severity: worst of score-derived and message-declared
+              const resolveSev = (v: number | null, label: string): Sev | null => {
+                if (v === null) return null;
+                const msg = factorMsg(label, v);
+                const fromScore = scoreSev(v);
+                if (!msg) return fromScore;
+                const rank: Record<Sev, number> = { good: 0, warning: 1, critical: 2 };
+                return rank[msg.sev] >= rank[fromScore] ? msg.sev : fromScore;
               };
               const factors: Array<{ label: string; value: number | null }> = [
-                { label: 'Drainage',     value: hudData.drainScore },
-                { label: 'Permeability', value: hudData.ksatScore },
-                { label: 'Slope',        value: hudData.slopeScore },
-                { label: 'Water table',  value: hudData.wtScore },
-                { label: 'Ponding',      value: hudData.pondingScore },
+                { label: 'Drainage',      value: hudData.drainScore },
+                { label: 'Permeability',  value: hudData.ksatScore },
+                { label: 'Slope',         value: hudData.slopeScore },
+                { label: 'Water table',   value: hudData.wtScore },
+                { label: 'Ponding',       value: hudData.pondingScore },
                 { label: 'Depth to rock', value: hudData.restrictiveLayerScore },
-                { label: 'Flooding',     value: hudData.floodingScore },
+                { label: 'Flooding',      value: hudData.floodingScore },
               ];
               return (
                 <div>
@@ -4866,9 +4871,9 @@ export default function ReportDetail({ reportId, onBack, isPublic = false }: Rep
                   <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
                     {factors.map(({ label, value }) => {
                       const isNull = value === null;
-                      const displayVal = value ?? 0;
-                      const vc = verdictColor(value);
-                      const icon = verdictIcon(value);
+                      const sev = resolveSev(value, label);
+                      const color = sev ? sevColor(sev) : NULL_COLOR;
+                      const msg = value !== null ? factorMsg(label, value) : null;
                       return (
                         <div key={label}>
                           <div className="flex items-center gap-2" style={{ marginBottom: 3 }}>
@@ -4876,17 +4881,22 @@ export default function ReportDetail({ reportId, onBack, isPublic = false }: Rep
                             <div style={{ flex: 1, height: 3, borderRadius: 2, background: 'rgba(255,255,255,0.08)', overflow: 'hidden' }}>
                               <div style={{
                                 height: '100%',
-                                width: isNull ? '0%' : `${displayVal}%`,
+                                width: isNull ? '0%' : `${value}%`,
                                 borderRadius: 2,
-                                background: isNull ? NULL_COLOR : barColor(displayVal),
+                                background: color,
                                 transition: 'width 0.45s ease, background 0.45s ease',
                               }} />
                             </div>
-                            <span style={{ fontSize: 10, color: isNull ? NULL_COLOR : barColor(displayVal), width: 24, textAlign: 'right', fontWeight: 600 }}>{isNull ? '—' : value}</span>
+                            <span style={{ fontSize: 10, color, width: 24, textAlign: 'right', fontWeight: 600 }}>{isNull ? '—' : value}</span>
                           </div>
                           <div style={{ display: 'flex', alignItems: 'flex-start', gap: 4, paddingLeft: 76 }}>
-                            {icon && <span style={{ fontSize: 11, color: vc, lineHeight: 1, flexShrink: 0, marginTop: 1 }}>{icon}</span>}
-                            <span style={{ fontSize: 11, color: vc, lineHeight: 1.45 }}>{verdictText(label, value)}</span>
+                            {isNull
+                              ? <span style={{ fontSize: 11, color: NULL_COLOR, lineHeight: 1.45 }}>No data available — field verification recommended</span>
+                              : <>
+                                  {sev !== 'good' && <span style={{ fontSize: 11, color, lineHeight: 1, flexShrink: 0, marginTop: 1 }}>{sevIcon(sev!)}</span>}
+                                  <span style={{ fontSize: 11, color, lineHeight: 1.45 }}>{msg?.text ?? ''}</span>
+                                </>
+                            }
                           </div>
                         </div>
                       );
