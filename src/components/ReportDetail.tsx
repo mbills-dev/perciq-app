@@ -206,16 +206,17 @@ function scoreSoilPolygon(
   })();
 
   // ── Factor D: Water table (20%) ──────────────────────────────────────────
+  // watertable comes from result.water_table_depth which soil-query stores in INCHES.
   const watertableScore = (() => {
     if (watertable === null) {
       const d = (drainagecl ?? '').toLowerCase();
       return d.includes('excessively drained') ? 85 : 55;
     }
-    if (watertable >= 120) return 95;
-    if (watertable >= 90) return 80;
-    if (watertable >= 60) return 60;
-    if (watertable >= 30) return 30;
-    if (watertable >= 0) return 5;
+    if (watertable >= 47) return 95;   // >= 47 in deep — no seasonal saturation risk
+    if (watertable >= 35) return 80;   // 35–47 in
+    if (watertable >= 24) return 60;   // 24–35 in — meets minimum for conventional
+    if (watertable >= 12) return 30;   // 12–24 in — limiting
+    if (watertable >= 0) return 5;     // < 12 in — very shallow
     return 55;
   })();
 
@@ -278,15 +279,16 @@ function scoreSoilPolygon(
   let ceiling = 100;
   const firedGates: string[] = [];
 
-  // Water table gate — watertable in cm (SSURGO wtdepannmin)
+  // Water table gate — watertable in INCHES (water_table_depth; soil-query converts cm→in at storage)
+  // Bands are half-open: exactly 18in hits the 18-24 band (ceiling 55), not the <18 band.
   if (watertable !== null) {
-    if (watertable < 45.72) {
+    if (watertable < 18) {            // < 18 in
       ceiling = Math.min(ceiling, GATE_CEIL.WATER_TABLE_VERY_SHALLOW);
       firedGates.push(`wt<18in→${GATE_CEIL.WATER_TABLE_VERY_SHALLOW}`);
-    } else if (watertable < 60.96) {
+    } else if (watertable < 24) {     // [18, 24)
       ceiling = Math.min(ceiling, GATE_CEIL.WATER_TABLE_SHALLOW);
       firedGates.push(`wt18-24in→${GATE_CEIL.WATER_TABLE_SHALLOW}`);
-    } else if (watertable < 91.44) {
+    } else if (watertable < 36) {     // [24, 36)
       ceiling = Math.min(ceiling, GATE_CEIL.WATER_TABLE_MODERATE);
       firedGates.push(`wt24-36in→${GATE_CEIL.WATER_TABLE_MODERATE}`);
     }
@@ -316,19 +318,21 @@ function scoreSoilPolygon(
   }
 
   // FEMA 100-yr flood spatial overlap gate
+  // > 25% → severe; [10%, 25%] → moderate (exactly 25% is moderate, not severe)
   if (floodOverlap > 0.25) {
     ceiling = Math.min(ceiling, GATE_CEIL.FEMA_FLOOD_HIGH);
     firedGates.push(`fema>25%→${GATE_CEIL.FEMA_FLOOD_HIGH}`);
-  } else if (floodOverlap > 0.10) {
+  } else if (floodOverlap >= 0.10) {
     ceiling = Math.min(ceiling, GATE_CEIL.FEMA_FLOOD_MODERATE);
     firedGates.push(`fema10-25%→${GATE_CEIL.FEMA_FLOOD_MODERATE}`);
   }
 
   // NWI wetland spatial overlap gate
+  // > 25% → severe; [10%, 25%] → moderate (exactly 25% is moderate, not severe)
   if (wetlandOverlap > 0.25) {
     ceiling = Math.min(ceiling, GATE_CEIL.WETLAND_HIGH);
     firedGates.push(`wetland>25%→${GATE_CEIL.WETLAND_HIGH}`);
-  } else if (wetlandOverlap > 0.10) {
+  } else if (wetlandOverlap >= 0.10) {
     ceiling = Math.min(ceiling, GATE_CEIL.WETLAND_MODERATE);
     firedGates.push(`wetland10-25%→${GATE_CEIL.WETLAND_MODERATE}`);
   }
@@ -339,12 +343,12 @@ function scoreSoilPolygon(
     firedGates.push(`ksat_extreme→${GATE_CEIL.KSAT_EXTREME}`);
   }
 
-  // Slope gate
+  // Slope gate — exactly 30% lands in steep (64), not severe (39); exactly 15% fires steep
   if (slope !== null) {
     if (slope > 30) {
       ceiling = Math.min(ceiling, GATE_CEIL.SLOPE_SEVERE);
       firedGates.push(`slope>30%→${GATE_CEIL.SLOPE_SEVERE}`);
-    } else if (slope > 15) {
+    } else if (slope >= 15) {
       ceiling = Math.min(ceiling, GATE_CEIL.SLOPE_STEEP);
       firedGates.push(`slope15-30%→${GATE_CEIL.SLOPE_STEEP}`);
     }
