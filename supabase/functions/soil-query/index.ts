@@ -133,6 +133,10 @@ interface SDARow {
   flodfreqcl: string | null;
   // Seasonal high water table: minimum soimoistdept_l (cm) across months where soimoiststat='Wet'
   water_table_cm: number | null;
+  // Clay horizon: shallowest depth (cm) where claytotal_r >= 35 AND ksat_r < 1.0, within top 150 cm
+  clay40_depth_cm: number | null;
+  // Maximum clay percentage across all horizons within top 150 cm
+  max_clay_pct: number | null;
 }
 
 function parseTable(sdaJson: Record<string, unknown>, hasRating: boolean): SDARow[] {
@@ -168,6 +172,8 @@ function parseTable(sdaJson: Record<string, unknown>, hasRating: boolean): SDARo
   const iPondfreq    = idx("pondfreqcl");
   const iFlodfreq    = idx("flodfreqcl");
   const iWaterTable  = idx("water_table_cm");
+  const iClay40      = idx("clay40_depth_cm");
+  const iMaxClay     = idx("max_clay_pct");
 
   return table.slice(1).map((row) => ({
     mukey:          String(row[iMukey]),
@@ -189,6 +195,8 @@ function parseTable(sdaJson: Record<string, unknown>, hasRating: boolean): SDARo
     pondfreqcl:     iPondfreq >= 0 ? toStr(row[iPondfreq]) : null,
     flodfreqcl:     iFlodfreq >= 0 ? toStr(row[iFlodfreq]) : null,
     water_table_cm: iWaterTable >= 0 ? toNum(row[iWaterTable]) : null,
+    clay40_depth_cm: iClay40 >= 0 ? toNum(row[iClay40]) : null,
+    max_clay_pct:   iMaxClay >= 0 ? toNum(row[iMaxClay]) : null,
   }));
 }
 
@@ -235,7 +243,19 @@ async function querySDA(wkt: string, withInterp: boolean): Promise<Record<string
    FROM comonth cm2
    JOIN cosoilmoist csm ON csm.comonthkey = cm2.comonthkey
    WHERE cm2.cokey = c.cokey AND csm.soimoiststat = 'Wet'
-  ) as water_table_cm`;
+  ) as water_table_cm,
+  (SELECT MIN(h2.hzdept_r)
+   FROM chorizon h2
+   WHERE h2.cokey = c.cokey
+     AND h2.claytotal_r >= 35
+     AND h2.ksat_r < 1.0
+     AND h2.hzdept_r < 150
+  ) as clay40_depth_cm,
+  (SELECT MAX(h2.claytotal_r)
+   FROM chorizon h2
+   WHERE h2.cokey = c.cokey
+     AND h2.hzdept_r < 150
+  ) as max_clay_pct`;
 
   const sql = withInterp
     ? `SELECT mu.mukey, mu.muname,
@@ -450,6 +470,8 @@ Deno.serve(async (req: Request) => {
       slope_low: row.slope_l,
       slope_high: row.slope_h,
       pct_coverage: row.comppct_r,
+      clay40_depth_cm: row.clay40_depth_cm,
+      max_clay_pct: row.max_clay_pct,
       raw_ssurgo: row as unknown as Record<string, unknown>,
     }));
 

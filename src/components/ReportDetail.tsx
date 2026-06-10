@@ -135,6 +135,8 @@ function scoreSoilPolygon(
   const flodfreqcl = (props.flodfreqcl ?? null) as string | null;
   const resdept_r = props.resdept_r != null ? parseFloat(props.resdept_r as string) : null;
   const reskind = (props.reskind ?? null) as string | null;
+  const clay40_depth_cm = props.clay40_depth_cm != null && props.clay40_depth_cm !== 'null'
+    ? parseFloat(props.clay40_depth_cm as string) || null : null;
 
   if (!_loggedBucketMukeys.has(mukey)) {
     _loggedBucketMukeys.add(mukey);
@@ -203,16 +205,18 @@ function scoreSoilPolygon(
   })();
 
   // ── Factor F: Depth to restrictive layer (cm) ─────────────────────────────
-  // All layer types count — hard bedrock, paralithic/soft bedrock, fragipan, duripan, cemented.
+  // Primary source: corestrictions resdept_r. Fallback: clay horizon at >=35% clay AND ksat<1.0.
   // null resdept with a known limiting reskind → score 50 (unknown depth, not assumed deep).
-  // null resdept and null reskind → null (no data at all).
+  // null resdept, null clay, null reskind → null (no data at all).
   const LIMITING_RESKIND = ['bedrock', 'paralithic', 'fragipan', 'duripan', 'cemented', 'ortstein', 'permafrost'];
   const isLimitingKind = reskind !== null && LIMITING_RESKIND.some(k => reskind.toLowerCase().includes(k));
+  // Effective restrictive depth in cm — use resdept_r first, clay40_depth_cm as fallback
+  const effectiveResdeptCm = resdept_r !== null && !isNaN(resdept_r) ? resdept_r : clay40_depth_cm;
   const restrictiveLayerScore: number | null = (() => {
-    if (resdept_r !== null && !isNaN(resdept_r)) {
-      if (resdept_r > 150) return 100;
-      if (resdept_r >= 100) return 90;
-      if (resdept_r >= 50) return 75;
+    if (effectiveResdeptCm !== null && !isNaN(effectiveResdeptCm)) {
+      if (effectiveResdeptCm > 150) return 100;
+      if (effectiveResdeptCm >= 100) return 90;
+      if (effectiveResdeptCm >= 50) return 75;
       return 0;
     }
     // depth missing but a limiting layer type is recorded — neutral unknown, not "no problem"
@@ -927,6 +931,7 @@ async function buildSoilPolygons(
           flodfreqcl: raw.flodfreqcl ?? props.flodfreqcl ?? null,
           resdept_r: raw.resdept_r ?? props.resdept_r ?? null,
           reskind: raw.reskind ?? props.reskind ?? null,
+          clay40_depth_cm: result.clay40_depth_cm ?? null,
         };
       }
 
@@ -950,6 +955,8 @@ async function buildSoilPolygons(
       clipped.properties.rawResdeptCm = clipped.properties.resdept_r != null ? parseFloat(clipped.properties.resdept_r as string) || null : null;
       clipped.properties.rawFlodfreqcl = clipped.properties.flodfreqcl ?? null;
       clipped.properties.rawSlopePct = clipped.properties.slope_h != null ? parseFloat(clipped.properties.slope_h as string) || null : null;
+      clipped.properties.clay40DepthCm = clipped.properties.clay40_depth_cm != null && clipped.properties.clay40_depth_cm !== 'null'
+        ? parseFloat(clipped.properties.clay40_depth_cm as string) || null : null;
 
       // Copy scoring properties onto a display copy of the full unclipped SSURGO polygon.
       // Large parcels often have many small clipped slivers that leave visual gaps — the full
@@ -1158,6 +1165,8 @@ interface SoilHoverData {
   rawResdeptCm: number | null;
   rawFlodfreqcl: string | null;
   rawSlopePct: number | null;
+  // clay horizon depth (cm) — proxy restrictive layer when resdept_r is null
+  clay40DepthCm: number | null;
 }
 
 interface MapPanelProps {
@@ -2195,6 +2204,7 @@ function MapPanel({ reportId, cachedOverlayGeojson, parcelBoundary, isBboxFallba
           rawResdeptCm: p.rawResdeptCm != null && p.rawResdeptCm !== 'null' ? Number(p.rawResdeptCm) : null,
           rawFlodfreqcl: p.rawFlodfreqcl != null && p.rawFlodfreqcl !== 'null' ? String(p.rawFlodfreqcl) : null,
           rawSlopePct: p.rawSlopePct != null && p.rawSlopePct !== 'null' ? Number(p.rawSlopePct) : null,
+          clay40DepthCm: p.clay40DepthCm != null && p.clay40DepthCm !== 'null' ? Number(p.clay40DepthCm) : null,
         });
       });
       map.on('click', 'soil-fill', (e) => {
@@ -2221,6 +2231,7 @@ function MapPanel({ reportId, cachedOverlayGeojson, parcelBoundary, isBboxFallba
           rawResdeptCm: p.rawResdeptCm != null && p.rawResdeptCm !== 'null' ? Number(p.rawResdeptCm) : null,
           rawFlodfreqcl: p.rawFlodfreqcl != null && p.rawFlodfreqcl !== 'null' ? String(p.rawFlodfreqcl) : null,
           rawSlopePct: p.rawSlopePct != null && p.rawSlopePct !== 'null' ? Number(p.rawSlopePct) : null,
+          clay40DepthCm: p.clay40DepthCm != null && p.clay40DepthCm !== 'null' ? Number(p.clay40DepthCm) : null,
         });
       });
     } catch { /* ignore interaction setup errors */ } // end soil click/hover registration
@@ -4240,6 +4251,7 @@ export default function ReportDetail({ reportId, onBack, isPublic = false }: Rep
       rawResdeptCm: props.rawResdeptCm != null && props.rawResdeptCm !== 'null' ? Number(props.rawResdeptCm) : null,
       rawFlodfreqcl: props.rawFlodfreqcl != null && props.rawFlodfreqcl !== 'null' ? String(props.rawFlodfreqcl) : null,
       rawSlopePct: props.rawSlopePct != null && props.rawSlopePct !== 'null' ? Number(props.rawSlopePct) : null,
+      clay40DepthCm: props.clay40DepthCm != null && props.clay40DepthCm !== 'null' ? Number(props.clay40DepthCm) : null,
     };
   })();
 
@@ -4278,12 +4290,20 @@ export default function ReportDetail({ reportId, onBack, isPublic = false }: Rep
         warnings.push('Moderately shallow water table — investigate before ordering perc test');
       }
     }
-    if (data.rawResdeptCm !== null) {
-      const rdInches = data.rawResdeptCm * 0.394;
+    // Depth to restrictive layer — primary: corestrictions resdept_r; fallback: clay horizon
+    const restrictiveDepthCm = data.rawResdeptCm !== null ? data.rawResdeptCm
+      : data.clay40DepthCm !== null ? data.clay40DepthCm : null;
+    const isClayInferred = data.rawResdeptCm === null && data.clay40DepthCm !== null;
+    if (restrictiveDepthCm !== null) {
+      const rdInches = restrictiveDepthCm * 0.394;
       if (rdInches < 20) {
-        criticals.push('Shallow restrictive layer — insufficient depth for standard installation');
+        criticals.push(isClayInferred
+          ? 'Shallow clay horizon detected — conventional system unlikely without mound or alternative design'
+          : 'Shallow restrictive layer — insufficient depth for standard installation');
       } else if (rdInches < 36) {
-        warnings.push('Shallow restrictive layer — may limit system options');
+        warnings.push(isClayInferred
+          ? 'Clay horizon at moderate depth — may require engineered system'
+          : 'Shallow restrictive layer — may limit system options');
       }
     }
     if (data.rawSlopePct !== null && data.rawSlopePct > 15) {
@@ -4378,7 +4398,7 @@ export default function ReportDetail({ reportId, onBack, isPublic = false }: Rep
   const siteAlerts = getSiteAlerts(hudData);
   const isHovering = !!hudHover;
   const isLocked = !!hudLocked && !hudHover;
-  const activeSource = hudData ?? { drainScore: 0, ksatScore: 0, slopeScore: 0, wtScore: 0, pondingScore: null as number | null, restrictiveLayerScore: null as number | null, floodingScore: null as number | null, floodOverlapPct: 0, wetlandOverlapPct: 0, soilName: '—', finalScore: 0, bucket: 'no-data' as const, mukey: '', rawWatertableCm: null as number | null, rawResdeptCm: null as number | null, rawFlodfreqcl: null as string | null, rawSlopePct: null as number | null };
+  const activeSource = hudData ?? { drainScore: 0, ksatScore: 0, slopeScore: 0, wtScore: 0, pondingScore: null as number | null, restrictiveLayerScore: null as number | null, floodingScore: null as number | null, floodOverlapPct: 0, wetlandOverlapPct: 0, soilName: '—', finalScore: 0, bucket: 'no-data' as const, mukey: '', rawWatertableCm: null as number | null, rawResdeptCm: null as number | null, rawFlodfreqcl: null as string | null, rawSlopePct: null as number | null, clay40DepthCm: null as number | null };
 
   const barColor = (v: number) => v >= 70 ? '#30D158' : v >= 45 ? '#FF9F0A' : '#FF453A';
   const bucketColor = (b: string) => b === 'viable' ? '#22C55E' : b === 'not-suitable' ? '#FF4539' : b === 'engineering-needed' ? '#FF9F09' : '#6B7280';
@@ -4809,6 +4829,14 @@ export default function ReportDetail({ reportId, onBack, isPublic = false }: Rep
                 }
                 if (label === 'Depth to rock') {
                   if (v === null) return noData;
+                  // Clay-inferred restriction: resdept_r was null, clay horizon is the source
+                  const isClayInferred = hudData.rawResdeptCm === null && hudData.clay40DepthCm !== null;
+                  if (isClayInferred && hudData.clay40DepthCm !== null) {
+                    const depthIn = Math.round(hudData.clay40DepthCm * 0.394);
+                    if (v >= 75) return `Inferred clay restriction at ~${depthIn} inches — verify on site.`;
+                    if (v >= 50) return `Inferred clay restriction at ~${depthIn} inches — verify on site.`;
+                    return `Inferred clay restriction at ~${depthIn} inches — may limit drain field options.`;
+                  }
                   if (v >= 80) return 'No shallow restrictive layers detected.';
                   if (v >= 55) return 'Moderate depth to rock or saprolite — verify on site.';
                   return 'Shallow rock or saprolite — may limit drain field depth.';

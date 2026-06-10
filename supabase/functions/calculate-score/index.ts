@@ -30,6 +30,9 @@ interface SoilResult {
   slope_low: number | null;
   slope_high: number | null;
   pct_coverage: number | null;
+  // clay40_depth_cm: shallowest horizon (cm) where clay>=35% AND ksat<1.0 — proxy restrictive layer
+  clay40_depth_cm: number | null;
+  max_clay_pct: number | null;
   raw_ssurgo: Record<string, unknown> | null;
 }
 
@@ -302,18 +305,31 @@ interface ComponentScore {
   explanations: string[];
 }
 
-function scoreRestrictiveLayer(resdept_r: number | null, reskind: string | null): { multiplier: number; note: string } {
+function scoreRestrictiveLayer(
+  resdept_r: number | null,
+  reskind: string | null,
+  clay40_depth_cm: number | null,
+): { multiplier: number; note: string } {
   const LIMITING = ['bedrock', 'paralithic', 'fragipan', 'duripan', 'cemented', 'ortstein', 'permafrost', 'densic'];
   const isLimiting = reskind != null && LIMITING.some(k => reskind.toLowerCase().includes(k));
 
-  if (resdept_r == null) {
+  // Use resdept_r (corestrictions) as primary; clay40_depth_cm as fallback (convert cm→inches)
+  const CM_TO_IN = 0.393701;
+  const effectiveDepth = resdept_r != null
+    ? resdept_r
+    : clay40_depth_cm != null ? Math.round(clay40_depth_cm * CM_TO_IN) : null;
+  const isClay = resdept_r == null && clay40_depth_cm != null;
+
+  if (effectiveDepth == null) {
     if (isLimiting) return { multiplier: 0.85, note: `Restrictive layer (${reskind}) depth unknown — applying precautionary penalty` };
     return { multiplier: 1.0, note: "No restrictive layer recorded" };
   }
-  if (resdept_r > 60) return { multiplier: 1.0, note: `Restrictive layer (${reskind ?? "unknown"}) at ${resdept_r.toFixed(0)} inches — deep enough for conventional drainfield` };
-  if (resdept_r >= 36) return { multiplier: 0.80, note: `Restrictive layer (${reskind ?? "unknown"}) at ${resdept_r.toFixed(0)} inches — limits drainfield depth, engineered design likely required` };
-  if (resdept_r >= 18) return { multiplier: 0.50, note: `Restrictive layer (${reskind ?? "unknown"}) at ${resdept_r.toFixed(0)} inches — severely limits conventional system options` };
-  return { multiplier: 0.15, note: `Restrictive layer (${reskind ?? "unknown"}) at ${resdept_r.toFixed(0)} inches — drainfield installation not feasible` };
+
+  const kindLabel = isClay ? "clay horizon" : (reskind ?? "unknown");
+  if (effectiveDepth > 60) return { multiplier: 1.0, note: `Restrictive layer (${kindLabel}) at ${effectiveDepth} inches — deep enough for conventional drainfield` };
+  if (effectiveDepth >= 36) return { multiplier: 0.80, note: `Restrictive layer (${kindLabel}) at ${effectiveDepth} inches — limits drainfield depth, engineered design likely required` };
+  if (effectiveDepth >= 18) return { multiplier: 0.50, note: `Restrictive layer (${kindLabel}) at ${effectiveDepth} inches — severely limits conventional system options` };
+  return { multiplier: 0.15, note: `Restrictive layer (${kindLabel}) at ${effectiveDepth} inches — drainfield installation not feasible` };
 }
 
 function scoreComponent(r: SoilResult, lenientAlt: boolean): ComponentScore {
@@ -344,7 +360,7 @@ function scoreComponent(r: SoilResult, lenientAlt: boolean): ComponentScore {
 
   // Restrictive layer is a separate multiplier, not folded into water table score.
   const reskind = (r.raw_ssurgo?.reskind as string | null) ?? null;
-  const restrictive = scoreRestrictiveLayer(r.depth_water_table, reskind);
+  const restrictive = scoreRestrictiveLayer(r.depth_water_table, reskind, r.clay40_depth_cm ?? null);
   explanations.push(restrictive.note);
 
   const baseConv =

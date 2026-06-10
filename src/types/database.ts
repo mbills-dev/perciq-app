@@ -84,6 +84,8 @@ export interface SoilResult {
   slope_low: number | null;
   slope_high: number | null;
   pct_coverage: number | null;
+  clay40_depth_cm: number | null;  // shallowest clay horizon (cm) where clay>=35% AND ksat<1.0; proxy restriction
+  max_clay_pct: number | null;     // max clay % in top 150 cm
   raw_ssurgo: Record<string, unknown> | null;
   soil_polygon_geojson: Record<string, unknown> | null;
   created_at: string;
