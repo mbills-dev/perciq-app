@@ -373,7 +373,7 @@ function scoreSoilPolygon(
     'final_SI:', finalScore, 'bucket:', bucket);
 
   return {
-    finalScore, qualityComposite: Math.round(qualityComposite), ceiling, bucket,
+    finalScore, qualityComposite: Math.round(qualityComposite), ceiling, firedGates, bucket,
     drainageScore, ksatScore, slopeScore, watertableScore,
     pondingScore, restrictiveLayerScore, floodingScore,
     floodOverlapPct: Math.round(floodOverlap * 100),
@@ -1054,7 +1054,7 @@ async function buildSoilPolygons(
       }
 
       const scored = scoreSoilPolygon(clipped.properties as Record<string, unknown>, mukeyStr, floodUnion, floodFeatures, wetlandUnion, wetlandFeatures, clipped);
-      const { bucket, finalScore, drainageScore, ksatScore, slopeScore, watertableScore, pondingScore, restrictiveLayerScore, floodingScore, floodOverlapPct, wetlandOverlapPct } = scored;
+      const { bucket, finalScore, ceiling: scoredCeiling, firedGates: scoredGates, drainageScore, ksatScore, slopeScore, watertableScore, pondingScore, restrictiveLayerScore, floodingScore, floodOverlapPct, wetlandOverlapPct } = scored;
 
       clipped.properties.suitabilityScore = finalScore;
       clipped.properties.bucket = bucket;
@@ -1068,13 +1068,17 @@ async function buildSoilPolygons(
       clipped.properties.floodOverlapPct = floodOverlapPct;
       clipped.properties.wetlandOverlapPct = wetlandOverlapPct;
       clipped.properties.mukey = mukeyStr;
-      // raw values preserved for independent site alert checks
+      // Gate output stored for site alerts — single source of truth
+      clipped.properties.firedGates = JSON.stringify(scoredGates);
+      clipped.properties.gatingCeiling = scoredCeiling;
+      // raw values preserved for factor bar display (NOT used by site alerts)
       clipped.properties.rawWatertableCm = clipped.properties.wtdepannmin != null ? parseFloat(clipped.properties.wtdepannmin as string) || null : null;
       clipped.properties.rawResdeptCm = clipped.properties.resdept_r != null ? parseFloat(clipped.properties.resdept_r as string) || null : null;
       clipped.properties.rawFlodfreqcl = clipped.properties.flodfreqcl ?? null;
       clipped.properties.rawSlopePct = clipped.properties.slope_h != null ? parseFloat(clipped.properties.slope_h as string) || null : null;
       clipped.properties.clay40DepthCm = clipped.properties.clay40_depth_cm != null && clipped.properties.clay40_depth_cm !== 'null'
         ? parseFloat(clipped.properties.clay40_depth_cm as string) || null : null;
+      console.log('[alerts] mukey', mukeyStr, 'gates_fired:', scoredGates.length ? scoredGates.join(' ') : 'none', 'ceiling:', scoredCeiling);
 
       // Copy scoring properties onto a display copy of the full unclipped SSURGO polygon.
       // Large parcels often have many small clipped slivers that leave visual gaps — the full
@@ -1278,12 +1282,14 @@ interface SoilHoverData {
   restrictiveLayerScore: number | null;
   floodingScore: number | null;
   soilName: string;
-  // raw values for independent site alert checks (not blended into SI score)
+  // Gate output — single source of truth for site alerts
+  firedGates: string[];
+  gatingCeiling: number;
+  // raw values for factor bar display only (not used for alert logic)
   rawWatertableCm: number | null;
   rawResdeptCm: number | null;
   rawFlodfreqcl: string | null;
   rawSlopePct: number | null;
-  // clay horizon depth (cm) — proxy restrictive layer when resdept_r is null
   clay40DepthCm: number | null;
 }
 
@@ -2329,6 +2335,8 @@ function MapPanel({ reportId, cachedOverlayGeojson, parcelBoundary, isBboxFallba
           restrictiveLayerScore: hasScore && p.restrictiveLayerScore != null && p.restrictiveLayerScore !== 'null' ? Number(p.restrictiveLayerScore) : null,
           floodingScore: hasScore && p.floodingScore != null && p.floodingScore !== 'null' ? Number(p.floodingScore) : null,
           soilName: String(p.muname ?? p.musym ?? `Soil unit ${p.mukey ?? ''}`),
+          firedGates: (() => { try { return JSON.parse(String(p.firedGates ?? '[]')) as string[]; } catch { return []; } })(),
+          gatingCeiling: p.gatingCeiling != null && p.gatingCeiling !== 'null' ? Number(p.gatingCeiling) : 100,
           rawWatertableCm: p.rawWatertableCm != null && p.rawWatertableCm !== 'null' ? Number(p.rawWatertableCm) : null,
           rawResdeptCm: p.rawResdeptCm != null && p.rawResdeptCm !== 'null' ? Number(p.rawResdeptCm) : null,
           rawFlodfreqcl: p.rawFlodfreqcl != null && p.rawFlodfreqcl !== 'null' ? String(p.rawFlodfreqcl) : null,
@@ -2356,6 +2364,8 @@ function MapPanel({ reportId, cachedOverlayGeojson, parcelBoundary, isBboxFallba
           restrictiveLayerScore: hasScore && p.restrictiveLayerScore != null && p.restrictiveLayerScore !== 'null' ? Number(p.restrictiveLayerScore) : null,
           floodingScore: hasScore && p.floodingScore != null && p.floodingScore !== 'null' ? Number(p.floodingScore) : null,
           soilName: String(p.muname ?? p.musym ?? `Soil unit ${p.mukey ?? ''}`),
+          firedGates: (() => { try { return JSON.parse(String(p.firedGates ?? '[]')) as string[]; } catch { return []; } })(),
+          gatingCeiling: p.gatingCeiling != null && p.gatingCeiling !== 'null' ? Number(p.gatingCeiling) : 100,
           rawWatertableCm: p.rawWatertableCm != null && p.rawWatertableCm !== 'null' ? Number(p.rawWatertableCm) : null,
           rawResdeptCm: p.rawResdeptCm != null && p.rawResdeptCm !== 'null' ? Number(p.rawResdeptCm) : null,
           rawFlodfreqcl: p.rawFlodfreqcl != null && p.rawFlodfreqcl !== 'null' ? String(p.rawFlodfreqcl) : null,
@@ -4381,6 +4391,8 @@ export default function ReportDetail({ reportId, onBack, isPublic = false }: Rep
       restrictiveLayerScore: props.restrictiveLayerScore != null && props.restrictiveLayerScore !== 'null' ? Number(props.restrictiveLayerScore) : null,
       floodingScore: props.floodingScore != null && props.floodingScore !== 'null' ? Number(props.floodingScore) : null,
       soilName: String(props.muname ?? props.musym ?? `Soil ${tabPolygon.mukey}`),
+      firedGates: (() => { try { return JSON.parse(String(props.firedGates ?? '[]')) as string[]; } catch { return []; } })(),
+      gatingCeiling: props.gatingCeiling != null && props.gatingCeiling !== 'null' ? Number(props.gatingCeiling) : 100,
       rawWatertableCm: props.rawWatertableCm != null && props.rawWatertableCm !== 'null' ? Number(props.rawWatertableCm) : null,
       rawResdeptCm: props.rawResdeptCm != null && props.rawResdeptCm !== 'null' ? Number(props.rawResdeptCm) : null,
       rawFlodfreqcl: props.rawFlodfreqcl != null && props.rawFlodfreqcl !== 'null' ? String(props.rawFlodfreqcl) : null,
@@ -4397,52 +4409,39 @@ export default function ReportDetail({ reportId, onBack, isPublic = false }: Rep
     return (total / 4047).toFixed(1);
   })();
 
-  // ── Site Alerts — independent of SI score ────────────────────────────────
+  // ── Site Alerts — derived entirely from the gate evaluation output ────────
+  // firedGates is the single source of truth: the same keys that set the ceiling
+  // set the alert. A zone with no fired gates produces no alerts.
+  const GATE_ALERT: Record<string, { level: 'critical' | 'warning'; message: string }> = {
+    'wt<18in':             { level: 'critical', message: 'Shallow water table — conventional system unlikely to pass nationally' },
+    'wt18-24in':           { level: 'warning',  message: 'Moderately shallow water table — investigate before ordering perc test' },
+    'wt24-36in':           { level: 'warning',  message: 'Water table at moderate depth — verify seasonal high before ordering perc test' },
+    'restr<20in(bedrock)': { level: 'critical', message: 'Shallow restrictive layer — insufficient depth for standard installation' },
+    'restr<20in(clay)':    { level: 'critical', message: 'Shallow clay horizon — conventional system unlikely without mound or alternative design' },
+    'restr20-36in':        { level: 'warning',  message: 'Restrictive layer at moderate depth — may limit system options' },
+    'flodfreq':            { level: 'critical', message: 'High flood risk — septic installation not recommended' },
+    'fema>25%':            { level: 'critical', message: 'High-risk flood zone — engineered system likely required' },
+    'fema10-25%':          { level: 'warning',  message: 'Partial flood zone — engineered system may be required' },
+    'wetland>25%':         { level: 'critical', message: 'Significant wetland overlap — regulatory approval unlikely' },
+    'wetland10-25%':       { level: 'warning',  message: 'Partial wetland overlap — verify boundaries before ordering test' },
+    'ksat_extreme':        { level: 'critical', message: 'Extreme soil permeability — effluent treatment not adequate' },
+    'slope>30%':           { level: 'critical', message: 'Excessive slope — drainfield installation not feasible' },
+    'slope15-30%':         { level: 'warning',  message: 'Steep slope — site-specific design likely needed' },
+  };
+
   const getSiteAlerts = (data: SoilHoverData | null): { criticals: string[]; warnings: string[] } => {
     if (!data) return { criticals: [], warnings: [] };
     const criticals: string[] = [];
     const warnings: string[] = [];
-    const flood = (data.rawFlodfreqcl ?? '').toLowerCase();
-    if (flood === 'frequent' || flood === 'very frequent') {
-      criticals.push('High flood risk — septic installation not recommended');
+    for (const gate of data.firedGates) {
+      // Gate string format: "keypart→ceiling" (e.g. "wt18-24in→55")
+      const key = gate.split('→')[0];
+      const alert = GATE_ALERT[key];
+      if (!alert) continue;
+      if (alert.level === 'critical') criticals.push(alert.message);
+      else warnings.push(alert.message);
     }
-    if (data.wetlandOverlapPct > 25) {
-      criticals.push('Significant wetland overlap — regulatory approval unlikely');
-    } else if (data.wetlandOverlapPct >= 10) {
-      warnings.push('Partial wetland overlap — verify boundaries before ordering test');
-    }
-    if (data.floodOverlapPct > 25) {
-      criticals.push('High-risk flood zone — engineered system likely required');
-    } else if (data.floodOverlapPct >= 10) {
-      warnings.push('Partial flood zone — engineered system may be required');
-    }
-    if (data.rawWatertableCm !== null) {
-      const wtInches = data.rawWatertableCm * 0.394;
-      if (wtInches < 24) {
-        criticals.push('Shallow water table — conventional system unlikely to pass nationally');
-      } else if (wtInches < 36) {
-        warnings.push('Moderately shallow water table — investigate before ordering perc test');
-      }
-    }
-    // Depth to restrictive layer — primary: corestrictions resdept_r; fallback: clay horizon
-    const restrictiveDepthCm = data.rawResdeptCm !== null ? data.rawResdeptCm
-      : data.clay40DepthCm !== null ? data.clay40DepthCm : null;
-    const isClayInferred = data.rawResdeptCm === null && data.clay40DepthCm !== null;
-    if (restrictiveDepthCm !== null) {
-      const rdInches = restrictiveDepthCm * 0.394;
-      if (rdInches < 20) {
-        criticals.push(isClayInferred
-          ? 'Shallow clay horizon detected — conventional system unlikely without mound or alternative design'
-          : 'Shallow restrictive layer — insufficient depth for standard installation');
-      } else if (rdInches < 36) {
-        warnings.push(isClayInferred
-          ? 'Clay horizon at moderate depth — may require engineered system'
-          : 'Shallow restrictive layer — may limit system options');
-      }
-    }
-    if (data.rawSlopePct !== null && data.rawSlopePct > 15) {
-      warnings.push('Steep slope — site-specific design likely needed');
-    }
+    console.log('[alerts] mukey', data.mukey, 'gates_fired:', data.firedGates.join(' ') || 'none', 'alerts_emitted:', [...criticals, ...warnings].join(' | ') || 'none');
     return { criticals, warnings };
   };
 
