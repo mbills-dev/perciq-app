@@ -4771,48 +4771,50 @@ export default function ReportDetail({ reportId, onBack, isPublic = false }: Rep
 
             {/* Soil factor bars */}
             {hudData && (() => {
-              const verdictColor = (v: number | null) => v === null ? '#64748b' : v >= 80 ? '#22C55E' : v >= 55 ? '#FF9F09' : '#FF4539';
-              const verdictIcon  = (v: number | null) => v === null ? '—' : v >= 80 ? '✓' : '⚠';
+              const NULL_COLOR = 'rgba(255,255,255,0.22)';
+              const verdictColor = (v: number | null) => v === null ? NULL_COLOR : v >= 80 ? '#22C55E' : v >= 55 ? '#FF9F09' : '#FF4539';
+              const verdictIcon  = (v: number | null) => v === null ? null : v >= 80 ? '✓' : '⚠';
               const verdictText  = (label: string, v: number | null): string => {
+                const noData = 'No data available — field verification recommended';
                 if (label === 'Drainage') {
-                  if (v === null) return 'Drainage class unknown.';
+                  if (v === null) return noData;
                   if (v >= 80) return 'Well drained — favorable conditions for septic.';
                   if (v >= 65) return 'Somewhat excessively drained — drains freely, low saturation risk.';
                   if (v >= 55) return 'Moderately well drained — adequate for most conventional systems.';
                   return 'Poorly drained — high risk of system failure.';
                 }
                 if (label === 'Permeability') {
-                  if (v === null) return 'Permeability data unavailable.';
+                  if (v === null) return noData;
                   if (v >= 80) return 'Good permeability — ideal range for conventional absorption.';
                   if (v >= 55) return 'Moderate-fast permeability — conventional systems generally approvable. Verify local design requirements.';
                   return 'Low permeability — may require engineered system. Verify with local health department.';
                 }
                 if (label === 'Slope') {
-                  if (v === null) return 'Slope data unavailable.';
+                  if (v === null) return noData;
                   if (v >= 80) return 'Gentle slope — unlikely to constrain septic placement.';
                   if (v >= 55) return 'Moderate slope — site-specific engineering may be needed.';
                   return 'Steep slope — limits conventional drain field placement.';
                 }
                 if (label === 'Water table') {
-                  if (v === null) return 'Depth unknown — local soil testing recommended.';
+                  if (v === null) return noData;
                   if (v >= 80) return 'Deep water table — no concerns for septic design.';
                   if (v >= 55) return 'Moderate depth — worth investigating before testing.';
                   return 'May be shallow — could affect septic design.';
                 }
                 if (label === 'Ponding') {
-                  if (v === null) return 'Ponding frequency unknown.';
+                  if (v === null) return noData;
                   if (v >= 80) return 'Standing water not expected — favorable condition.';
                   if (v >= 40) return 'Occasional ponding possible — evaluate buildable area.';
                   return 'Frequent ponding likely — high risk for system failure.';
                 }
                 if (label === 'Depth to rock') {
-                  if (v === null) return 'Restrictive layer depth unknown — field verification needed.';
+                  if (v === null) return noData;
                   if (v >= 80) return 'No shallow restrictive layers detected.';
                   if (v >= 55) return 'Moderate depth to rock or saprolite — verify on site.';
                   return 'Shallow rock or saprolite — may limit drain field depth.';
                 }
                 if (label === 'Flooding') {
-                  if (v === null) return 'Flooding frequency unknown.';
+                  if (v === null) return noData;
                   if (v >= 80) return 'Flooding not expected — no concerns.';
                   if (v >= 40) return 'Occasional flooding possible — verify buildable area.';
                   return 'Frequent flooding — unsuitable for conventional septic.';
@@ -4835,25 +4837,27 @@ export default function ReportDetail({ reportId, onBack, isPublic = false }: Rep
                   </p>
                   <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
                     {factors.map(({ label, value }) => {
-                      const displayVal = value ?? 50;
+                      const isNull = value === null;
+                      const displayVal = value ?? 0;
                       const vc = verdictColor(value);
+                      const icon = verdictIcon(value);
                       return (
                         <div key={label}>
                           <div className="flex items-center gap-2" style={{ marginBottom: 3 }}>
-                            <span style={{ fontSize: 10, color: 'rgba(255,255,255,0.45)', width: 72, flexShrink: 0 }}>{label}</span>
+                            <span style={{ fontSize: 10, color: isNull ? NULL_COLOR : 'rgba(255,255,255,0.45)', width: 72, flexShrink: 0 }}>{label}</span>
                             <div style={{ flex: 1, height: 3, borderRadius: 2, background: 'rgba(255,255,255,0.08)', overflow: 'hidden' }}>
                               <div style={{
                                 height: '100%',
-                                width: `${displayVal}%`,
+                                width: isNull ? '0%' : `${displayVal}%`,
                                 borderRadius: 2,
-                                background: barColor(displayVal),
+                                background: isNull ? NULL_COLOR : barColor(displayVal),
                                 transition: 'width 0.45s ease, background 0.45s ease',
                               }} />
                             </div>
-                            <span style={{ fontSize: 10, color: barColor(displayVal), width: 24, textAlign: 'right', fontWeight: 600 }}>{value ?? '—'}</span>
+                            <span style={{ fontSize: 10, color: isNull ? NULL_COLOR : barColor(displayVal), width: 24, textAlign: 'right', fontWeight: 600 }}>{isNull ? '—' : value}</span>
                           </div>
                           <div style={{ display: 'flex', alignItems: 'flex-start', gap: 4, paddingLeft: 76 }}>
-                            <span style={{ fontSize: 11, color: vc, lineHeight: 1, flexShrink: 0, marginTop: 1 }}>{verdictIcon(value)}</span>
+                            {icon && <span style={{ fontSize: 11, color: vc, lineHeight: 1, flexShrink: 0, marginTop: 1 }}>{icon}</span>}
                             <span style={{ fontSize: 11, color: vc, lineHeight: 1.45 }}>{verdictText(label, value)}</span>
                           </div>
                         </div>
