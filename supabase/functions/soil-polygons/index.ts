@@ -94,31 +94,90 @@ function parseGMLToGeoJSON(gml: string): GeoJSONFeature[] {
   return features;
 }
 
-function wktStringToGeojsonPolygon(wkt: string): { type: "Polygon"; coordinates: number[][][] } | null {
-  try {
-    // Handle MULTIPOLYGON — use first ring of first polygon
-    const isMulti = wkt.trimStart().toUpperCase().startsWith("MULTIPOLYGON");
-    let inner: string;
-    if (isMulti) {
-      const m = wkt.match(/MULTIPOLYGON\s*\(\(\((.+?)\)\)/i);
-      if (!m) return null;
-      inner = m[1];
-    } else {
-      const m = wkt.match(/POLYGON\s*\(\((.+?)\)\)/i);
-      if (!m) return null;
-      inner = m[1];
+// ── WKT parser (paren-nesting, no regex shortcuts) ────────────────────────────
+
+// Split a string on commas that are at paren-nesting depth 0.
+function splitTopLevel(s: string): string[] {
+  const parts: string[] = [];
+  let depth = 0, start = 0;
+  for (let i = 0; i < s.length; i++) {
+    if (s[i] === '(') depth++;
+    else if (s[i] === ')') depth--;
+    else if (s[i] === ',' && depth === 0) {
+      parts.push(s.slice(start, i).trim());
+      start = i + 1;
     }
-    const coords = inner.split(",").map(pair => {
-      const [lng, lat] = pair.trim().split(/\s+/).map(Number);
-      return [lng, lat];
-    }).filter(c => !isNaN(c[0]) && !isNaN(c[1]));
-    if (coords.length < 3) return null;
-    // Close ring if needed
-    const first = coords[0], last = coords[coords.length - 1];
-    if (first[0] !== last[0] || first[1] !== last[1]) coords.push([...first]);
-    return { type: "Polygon", coordinates: [coords] };
+  }
+  parts.push(s.slice(start).trim());
+  return parts.filter(p => p.length > 0);
+}
+
+// Strip exactly one leading '(' and one trailing ')'.
+function stripOneParen(s: string): string {
+  s = s.trim();
+  if (s.startsWith('(') && s.endsWith(')')) return s.slice(1, -1).trim();
+  return s;
+}
+
+// Parse a ring string "x1 y1, x2 y2, ..." (no outer parens) into coordinates.
+function parseRingStr(s: string): number[][] {
+  const coords = s.split(',').map(pair => {
+    const parts = pair.trim().split(/\s+/).map(Number);
+    return [parts[0], parts[1]];
+  }).filter(c => !isNaN(c[0]) && !isNaN(c[1]));
+  if (coords.length >= 3) {
+    const [x0, y0] = coords[0], [xn, yn] = coords[coords.length - 1];
+    if (x0 !== xn || y0 !== yn) coords.push([x0, y0]);
+  }
+  return coords;
+}
+
+// Parse WKT (POLYGON or MULTIPOLYGON) into one GeoJSON Polygon geometry per sub-polygon.
+// A MULTIPOLYGON with two disjoint patches yields two Polygon geometries.
+// Correctly preserves hole rings within each polygon.
+function wktToPolygonGeometries(wkt: string): { type: "Polygon"; coordinates: number[][][] }[] {
+  try {
+    const upper = wkt.trimStart().toUpperCase();
+    const isMulti = upper.startsWith("MULTIPOLYGON");
+
+    const parenStart = wkt.indexOf('(');
+    const parenEnd = wkt.lastIndexOf(')');
+    if (parenStart < 0 || parenEnd < 0) return [];
+
+    // Content between the outermost geometry parens.
+    // POLYGON((ring),(hole))       → outerContent = "(ring),(hole)"
+    // MULTIPOLYGON(((r1),(h1)),((r2))) → outerContent = "((r1),(h1)),((r2))"
+    const outerContent = wkt.slice(parenStart + 1, parenEnd).trim();
+
+    if (isMulti) {
+      // Each top-level group is one polygon: "((ring),(hole))" or "((ring))"
+      const polyGroups = splitTopLevel(outerContent);
+      const results: { type: "Polygon"; coordinates: number[][][] }[] = [];
+      for (const group of polyGroups) {
+        // Strip one paren level → "(ring),(hole)" or "(ring)"
+        const polyContent = stripOneParen(group);
+        const ringGroups = splitTopLevel(polyContent);
+        const rings: number[][][] = [];
+        for (const rg of ringGroups) {
+          const coords = parseRingStr(stripOneParen(rg));
+          if (coords.length >= 3) rings.push(coords);
+        }
+        if (rings.length > 0) results.push({ type: "Polygon", coordinates: rings });
+      }
+      return results;
+    } else {
+      // POLYGON: outerContent = "(ring),(hole),..."
+      const ringGroups = splitTopLevel(outerContent);
+      const rings: number[][][] = [];
+      for (const rg of ringGroups) {
+        const coords = parseRingStr(stripOneParen(rg));
+        if (coords.length >= 3) rings.push(coords);
+      }
+      if (rings.length === 0) return [];
+      return [{ type: "Polygon", coordinates: rings }];
+    }
   } catch {
-    return null;
+    return [];
   }
 }
 
@@ -168,9 +227,12 @@ async function handleTabularQuery(wkt: string, bbox?: [number, number, number, n
   for (const row of rows) {
     const [mukey, musym, muname, wktGeom] = row as string[];
     if (!wktGeom || !mukey) continue;
-    const geometry = wktStringToGeojsonPolygon(wktGeom);
-    if (geometry) {
+    const geometries = wktToPolygonGeometries(wktGeom);
+    for (const geometry of geometries) {
       features.push({ type: "Feature", properties: { mukey, musym, muname }, geometry });
+    }
+    if (geometries.length > 1) {
+      console.log(`[sda-tabular] mukey ${mukey} split into ${geometries.length} sub-polygon features`);
     }
   }
 

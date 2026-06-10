@@ -901,14 +901,26 @@ async function buildSoilPolygons(
       let clipped: turf.Feature<turf.Polygon | turf.MultiPolygon> | null = null;
 
       // Intersect each SSURGO polygon piece against the full parcel feature (Polygon or MultiPolygon).
+      // Union all intersecting patches so a multi-part mukey is preserved as a proper MultiPolygon
+      // rather than dropping all patches after the first.
       for (const ssurgoPoly of ssurgoPolygons) {
         const cleanSoil = turf.rewind(ssurgoPoly, { reverse: false });
         try {
           const candidate = turf.intersect(turf.featureCollection([parcelClipFeature, cleanSoil]));
-          if (candidate) { clipped = candidate; break; }
+          if (!candidate) continue;
+          if (clipped === null) {
+            clipped = candidate;
+          } else {
+            const unioned = turf.union(turf.featureCollection([clipped, candidate]));
+            if (unioned) clipped = unioned;
+          }
         } catch (e) {
           console.log('[clip] intersect error for mukey:', mukey, (e as Error).message);
         }
+      }
+      if (ssurgoPolygons.length > 1) {
+        console.log('[clip] multi-part mukey:', mukey, 'patches:', ssurgoPolygons.length,
+          '→ clipped type:', clipped?.geometry.type ?? 'null');
       }
       if (!clipped) continue;
       intersectCount++;
@@ -2006,6 +2018,17 @@ function MapPanel({ reportId, cachedOverlayGeojson, parcelBoundary, isBboxFallba
       const engCount = sortedPolygons.filter(p => p.bucket === 'engineering-needed').length;
       const notSuitCount = sortedPolygons.filter(p => p.bucket === 'not-suitable').length;
       console.log('[soil display] rendering', displayFeatures.length, 'scored polygons — viable:', viableCount, 'engineering:', engCount, 'not-suitable:', notSuitCount, 'excluded', soilFeatures.length - displayFeatures.length, 'unscored');
+      // Geometry integrity check: log type and ring count for every rendered feature.
+      // A Polygon with rings from two disjoint patches would show an unexpectedly high ring count.
+      displayFeatures.forEach((f, i) => {
+        const g = (f as turf.Feature).geometry as turf.Polygon | turf.MultiPolygon;
+        const ringInfo = g.type === 'Polygon'
+          ? `rings=${(g as turf.Polygon).coordinates.length}`
+          : g.type === 'MultiPolygon'
+            ? `parts=${(g as turf.MultiPolygon).coordinates.length} rings=${(g as turf.MultiPolygon).coordinates.map(p => p.length).join('+')}`
+            : 'unknown';
+        console.log(`[soil render] [${i}] mukey=${f.properties?.mukey} bucket=${f.properties?.bucket} geom=${g.type} ${ringInfo}`);
+      });
 
       soilResultsCountRef.current = scoringResults.length;
 
