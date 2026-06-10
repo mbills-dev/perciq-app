@@ -325,6 +325,16 @@ function scoreRestrictiveLayer(
     return { multiplier: 1.0, note: "No restrictive layer recorded" };
   }
 
+  // Clay-inferred restrictions are a fallback signal — corestrictions has no entry so depth is
+  // estimated from chorizon. They fire a Site Alert but do NOT multiply down the composite score.
+  if (isClay) {
+    const kindLabel = "inferred clay horizon";
+    if (effectiveDepth > 60) return { multiplier: 1.0, note: `${kindLabel} at ~${effectiveDepth} inches — deep enough for conventional drainfield; verify on site` };
+    if (effectiveDepth >= 36) return { multiplier: 1.0, note: `${kindLabel} at ~${effectiveDepth} inches — moderate depth; engineered design may be required` };
+    if (effectiveDepth >= 18) return { multiplier: 1.0, note: `${kindLabel} at ~${effectiveDepth} inches — shallow clay; verify on site before testing` };
+    return { multiplier: 1.0, note: `${kindLabel} at ~${effectiveDepth} inches — shallow clay horizon detected; conventional system unlikely without mound or alternative design` };
+  }
+
   const kindLabel = isClay ? "clay horizon" : (reskind ?? "unknown");
   if (effectiveDepth > 60) return { multiplier: 1.0, note: `Restrictive layer (${kindLabel}) at ${effectiveDepth} inches — deep enough for conventional drainfield` };
   if (effectiveDepth >= 36) return { multiplier: 0.80, note: `Restrictive layer (${kindLabel}) at ${effectiveDepth} inches — limits drainfield depth, engineered design likely required` };

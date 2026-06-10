@@ -253,9 +253,11 @@ function scoreSoilPolygon(
   // SSURGO ponding/flooding multipliers — null = no penalty; capped at max 15% and 10% reduction
   const pondingMultiplier  = pondingScore  !== null ? Math.max(0.85, pondingScore  / 100) : 1.0;
   const floodingMultiplier = floodingScore !== null ? Math.max(0.90, floodingScore / 100) : 1.0;
-  const resdeptMultiplier  = restrictiveLayerScore !== null ? (restrictiveLayerScore / 100) : 1.0;
+  // Restrictive layer (resdept / clay horizon) does NOT multiply finalScore.
+  // A shallow restriction fires a Site Alert; it is displayed via the factor bar but does not
+  // collapse the composite — the composite + site alert together convey the correct picture.
 
-  const finalScore = Math.round(baseScore * floodPenalty * wetlandPenalty * pondingMultiplier * resdeptMultiplier * floodingMultiplier);
+  const finalScore = Math.round(baseScore * floodPenalty * wetlandPenalty * pondingMultiplier * floodingMultiplier);
 
   // hasRealData: at least one SSURGO field came back with actual data (not just defaults)
   const hasRealData = ksat !== null || drainagecl !== null || watertable !== null || (resdept_r !== null && !isNaN(resdept_r));
@@ -2185,7 +2187,7 @@ function MapPanel({ reportId, cachedOverlayGeojson, parcelBoundary, isBboxFallba
         if (!e.features?.length) return;
         const p = e.features[0].properties as Record<string, unknown>;
         const bucket = String(p.bucket ?? 'no-data');
-        const hasScore = bucket !== 'no-data' && p.suitabilityScore != null && p.suitabilityScore !== 'null' && Number(p.suitabilityScore) > 0;
+        const hasScore = bucket !== 'no-data' && p.suitabilityScore != null && p.suitabilityScore !== 'null';
         onSoilHoverRef.current?.({
           mukey: String(p.mukey ?? ''),
           bucket,
@@ -2212,7 +2214,7 @@ function MapPanel({ reportId, cachedOverlayGeojson, parcelBoundary, isBboxFallba
         if (!e.features?.length) return;
         const p = e.features[0].properties as Record<string, unknown>;
         const bucket = String(p.bucket ?? 'no-data');
-        const hasScore = bucket !== 'no-data' && p.suitabilityScore != null && p.suitabilityScore !== 'null' && Number(p.suitabilityScore) > 0;
+        const hasScore = bucket !== 'no-data' && p.suitabilityScore != null && p.suitabilityScore !== 'null';
         onSoilClickRef.current?.({
           mukey: String(p.mukey ?? ''),
           bucket,
