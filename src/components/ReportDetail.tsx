@@ -1072,7 +1072,8 @@ async function buildSoilPolygons(
       clipped.properties.firedGates = JSON.stringify(scoredGates);
       clipped.properties.gatingCeiling = scoredCeiling;
       // raw values preserved for factor bar display (NOT used by site alerts)
-      clipped.properties.rawWatertableCm = clipped.properties.wtdepannmin != null ? parseFloat(clipped.properties.wtdepannmin as string) || null : null;
+      // wtdepannmin is set to result.water_table_depth (inches) by enrichment above, or null if no data
+      clipped.properties.rawWatertableInches = clipped.properties.wtdepannmin != null ? parseFloat(clipped.properties.wtdepannmin as string) || null : null;
       clipped.properties.rawResdeptCm = clipped.properties.resdept_r != null ? parseFloat(clipped.properties.resdept_r as string) || null : null;
       clipped.properties.rawFlodfreqcl = clipped.properties.flodfreqcl ?? null;
       clipped.properties.rawSlopePct = clipped.properties.slope_h != null ? parseFloat(clipped.properties.slope_h as string) || null : null;
@@ -1286,7 +1287,7 @@ interface SoilHoverData {
   firedGates: string[];
   gatingCeiling: number;
   // raw values for factor bar display only (not used for alert logic)
-  rawWatertableCm: number | null;
+  rawWatertableInches: number | null;
   rawResdeptCm: number | null;
   rawFlodfreqcl: string | null;
   rawSlopePct: number | null;
@@ -2337,7 +2338,7 @@ function MapPanel({ reportId, cachedOverlayGeojson, parcelBoundary, isBboxFallba
           soilName: String(p.muname ?? p.musym ?? `Soil unit ${p.mukey ?? ''}`),
           firedGates: (() => { try { return JSON.parse(String(p.firedGates ?? '[]')) as string[]; } catch { return []; } })(),
           gatingCeiling: p.gatingCeiling != null && p.gatingCeiling !== 'null' ? Number(p.gatingCeiling) : 100,
-          rawWatertableCm: p.rawWatertableCm != null && p.rawWatertableCm !== 'null' ? Number(p.rawWatertableCm) : null,
+          rawWatertableInches: p.rawWatertableInches != null && p.rawWatertableInches !== 'null' ? Number(p.rawWatertableInches) : null,
           rawResdeptCm: p.rawResdeptCm != null && p.rawResdeptCm !== 'null' ? Number(p.rawResdeptCm) : null,
           rawFlodfreqcl: p.rawFlodfreqcl != null && p.rawFlodfreqcl !== 'null' ? String(p.rawFlodfreqcl) : null,
           rawSlopePct: p.rawSlopePct != null && p.rawSlopePct !== 'null' ? Number(p.rawSlopePct) : null,
@@ -2366,7 +2367,7 @@ function MapPanel({ reportId, cachedOverlayGeojson, parcelBoundary, isBboxFallba
           soilName: String(p.muname ?? p.musym ?? `Soil unit ${p.mukey ?? ''}`),
           firedGates: (() => { try { return JSON.parse(String(p.firedGates ?? '[]')) as string[]; } catch { return []; } })(),
           gatingCeiling: p.gatingCeiling != null && p.gatingCeiling !== 'null' ? Number(p.gatingCeiling) : 100,
-          rawWatertableCm: p.rawWatertableCm != null && p.rawWatertableCm !== 'null' ? Number(p.rawWatertableCm) : null,
+          rawWatertableInches: p.rawWatertableInches != null && p.rawWatertableInches !== 'null' ? Number(p.rawWatertableInches) : null,
           rawResdeptCm: p.rawResdeptCm != null && p.rawResdeptCm !== 'null' ? Number(p.rawResdeptCm) : null,
           rawFlodfreqcl: p.rawFlodfreqcl != null && p.rawFlodfreqcl !== 'null' ? String(p.rawFlodfreqcl) : null,
           rawSlopePct: p.rawSlopePct != null && p.rawSlopePct !== 'null' ? Number(p.rawSlopePct) : null,
@@ -4393,7 +4394,7 @@ export default function ReportDetail({ reportId, onBack, isPublic = false }: Rep
       soilName: String(props.muname ?? props.musym ?? `Soil ${tabPolygon.mukey}`),
       firedGates: (() => { try { return JSON.parse(String(props.firedGates ?? '[]')) as string[]; } catch { return []; } })(),
       gatingCeiling: props.gatingCeiling != null && props.gatingCeiling !== 'null' ? Number(props.gatingCeiling) : 100,
-      rawWatertableCm: props.rawWatertableCm != null && props.rawWatertableCm !== 'null' ? Number(props.rawWatertableCm) : null,
+      rawWatertableInches: props.rawWatertableInches != null && props.rawWatertableInches !== 'null' ? Number(props.rawWatertableInches) : null,
       rawResdeptCm: props.rawResdeptCm != null && props.rawResdeptCm !== 'null' ? Number(props.rawResdeptCm) : null,
       rawFlodfreqcl: props.rawFlodfreqcl != null && props.rawFlodfreqcl !== 'null' ? String(props.rawFlodfreqcl) : null,
       rawSlopePct: props.rawSlopePct != null && props.rawSlopePct !== 'null' ? Number(props.rawSlopePct) : null,
@@ -4531,7 +4532,7 @@ export default function ReportDetail({ reportId, onBack, isPublic = false }: Rep
   const siteAlerts = getSiteAlerts(hudData);
   const isHovering = !!hudHover;
   const isLocked = !!hudLocked && !hudHover;
-  const activeSource = hudData ?? { drainScore: 0, ksatScore: 0, slopeScore: 0, wtScore: 0, pondingScore: null as number | null, restrictiveLayerScore: null as number | null, floodingScore: null as number | null, floodOverlapPct: 0, wetlandOverlapPct: 0, soilName: '—', finalScore: 0, bucket: 'no-data' as const, mukey: '', rawWatertableCm: null as number | null, rawResdeptCm: null as number | null, rawFlodfreqcl: null as string | null, rawSlopePct: null as number | null, clay40DepthCm: null as number | null };
+  const activeSource = hudData ?? { drainScore: 0, ksatScore: 0, slopeScore: 0, wtScore: 0, pondingScore: null as number | null, restrictiveLayerScore: null as number | null, floodingScore: null as number | null, floodOverlapPct: 0, wetlandOverlapPct: 0, soilName: '—', finalScore: 0, bucket: 'no-data' as const, mukey: '', rawWatertableInches: null as number | null, rawResdeptCm: null as number | null, rawFlodfreqcl: null as string | null, rawSlopePct: null as number | null, clay40DepthCm: null as number | null };
 
   const barColor = (v: number) => v >= 70 ? '#30D158' : v >= 45 ? '#FF9F0A' : '#FF453A';
   const bucketColor = (b: string) => b === 'viable' ? '#22C55E' : b === 'not-suitable' ? '#FF4539' : b === 'engineering-needed' ? '#FF9F09' : '#6B7280';
@@ -4991,7 +4992,9 @@ export default function ReportDetail({ reportId, onBack, isPublic = false }: Rep
                 { label: 'Drainage',      value: hudData.drainScore },
                 { label: 'Permeability',  value: hudData.ksatScore },
                 { label: 'Slope',         value: hudData.slopeScore },
-                { label: 'Water table',   value: hudData.wtScore },
+                // Show null (→ "—") when rawWatertableInches is null — wtScore=55 is a scoring neutral,
+                // not an observed depth, so displaying it as "Moderate depth" would be misleading.
+                { label: 'Water table',   value: hudData.rawWatertableInches !== null ? hudData.wtScore : null },
                 { label: 'Ponding',       value: hudData.pondingScore },
                 { label: 'Depth to restriction', value: hudData.restrictiveLayerScore },
                 { label: 'Flooding',      value: hudData.floodingScore },
