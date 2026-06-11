@@ -388,6 +388,78 @@ const BUCKET_FILL = {
   'no-data':      { fill: '#6B7280', fillOpacity: 0.25, stroke: '#6B7280' },
 };
 
+// ── Unified factor band copy ──────────────────────────────────────────────
+// Single source of truth per named band: the factor bar AND the site alert for
+// that band use the same text so they can never contradict each other.
+type BandSev = 'good' | 'warning' | 'critical';
+interface BandCopy {
+  barSev: BandSev;
+  barText: string;
+  alertText?: string;           // omit when this band produces no site alert
+  alertLevel?: 'critical' | 'warning';
+}
+const BAND: Record<string, BandCopy> = {
+  // ── Slope ──
+  slope_gentle:    { barSev: 'good',     barText: 'Gentle slope — unlikely to constrain septic placement.' },
+  slope_moderate:  { barSev: 'warning',  barText: 'Moderate slope — generally workable; verify field conditions.' },
+  slope_marginal:  { barSev: 'warning',  barText: 'Marginal slope — site-specific design likely needed.',
+                     alertText: 'Marginal slope — site-specific design likely needed', alertLevel: 'warning' },
+  slope_steep:     { barSev: 'critical', barText: 'Steep slope — exceeds typical drainfield limits.',
+                     alertText: 'Steep slope — alternative design or alternate site required', alertLevel: 'critical' },
+  // ── Water table ──
+  wt_critical:     { barSev: 'critical', barText: 'Shallow water table — conventional system unlikely to pass nationally.',
+                     alertText: 'Shallow water table — conventional system unlikely to pass nationally', alertLevel: 'critical' },
+  wt_shallow:      { barSev: 'warning',  barText: 'Moderately shallow water table — investigate before ordering perc test.',
+                     alertText: 'Moderately shallow water table — investigate before ordering perc test', alertLevel: 'warning' },
+  wt_moderate:     { barSev: 'warning',  barText: 'Water table at moderate depth — verify seasonal high before ordering perc test.',
+                     alertText: 'Water table at moderate depth — verify seasonal high before ordering perc test', alertLevel: 'warning' },
+  wt_deep:         { barSev: 'good',     barText: 'Deep water table — no concerns for septic design.' },
+  // ── Depth to restrictive layer ──
+  restr_bedrock:   { barSev: 'critical', barText: 'Shallow restrictive layer — insufficient depth for standard installation.',
+                     alertText: 'Shallow restrictive layer — insufficient depth for standard installation', alertLevel: 'critical' },
+  restr_clay:      { barSev: 'critical', barText: 'Shallow clay horizon — conventional system unlikely without mound or alternative design.',
+                     alertText: 'Shallow clay horizon — conventional system unlikely without mound or alternative design', alertLevel: 'critical' },
+  restr_moderate:  { barSev: 'warning',  barText: 'Restrictive layer at moderate depth — may limit system options.',
+                     alertText: 'Restrictive layer at moderate depth — may limit system options', alertLevel: 'warning' },
+  restr_deep:      { barSev: 'good',     barText: 'No shallow restrictive layers detected.' },
+  // ── Flooding (SSURGO flodfreqcl) ──
+  flood_frequent:  { barSev: 'critical', barText: 'Frequent flooding — high flood risk, septic installation not recommended.',
+                     alertText: 'High flood risk — septic installation not recommended', alertLevel: 'critical' },
+  flood_occasional:{ barSev: 'warning',  barText: 'Occasional flooding possible — verify buildable area.' },
+  flood_none:      { barSev: 'good',     barText: 'Flooding not expected — no concerns.' },
+  // ── FEMA flood zone ──
+  fema_high:       { barSev: 'critical', barText: 'High-risk flood zone — engineered system likely required.',
+                     alertText: 'High-risk flood zone — engineered system likely required', alertLevel: 'critical' },
+  fema_moderate:   { barSev: 'warning',  barText: 'Partial flood zone — engineered system may be required.',
+                     alertText: 'Partial flood zone — engineered system may be required', alertLevel: 'warning' },
+  // ── NWI wetland ──
+  wetland_high:    { barSev: 'critical', barText: 'Significant wetland overlap — regulatory approval unlikely.',
+                     alertText: 'Significant wetland overlap — regulatory approval unlikely', alertLevel: 'critical' },
+  wetland_moderate:{ barSev: 'warning',  barText: 'Partial wetland overlap — verify boundaries before ordering test.',
+                     alertText: 'Partial wetland overlap — verify boundaries before ordering test', alertLevel: 'warning' },
+  // ── Permeability extreme ──
+  ksat_extreme:    { barSev: 'critical', barText: 'Extreme permeability — effluent treatment not adequate.',
+                     alertText: 'Extreme soil permeability — effluent treatment not adequate', alertLevel: 'critical' },
+};
+
+// Maps every fired-gate key string to the band that governs its alert + bar copy.
+const GATE_BAND: Record<string, string> = {
+  'wt<18in':             'wt_critical',
+  'wt18-24in':           'wt_shallow',
+  'wt24-36in':           'wt_moderate',
+  'restr<20in(bedrock)': 'restr_bedrock',
+  'restr<20in(clay)':    'restr_clay',
+  'restr20-36in':        'restr_moderate',
+  'flodfreq':            'flood_frequent',
+  'fema>25%':            'fema_high',
+  'fema10-25%':          'fema_moderate',
+  'wetland>25%':         'wetland_high',
+  'wetland10-25%':       'wetland_moderate',
+  'ksat_extreme':        'ksat_extreme',
+  'slope>30%':           'slope_steep',
+  'slope15-30%':         'slope_marginal',
+};
+
 function withTimeout<T>(p: Promise<T>, ms: number, label: string): Promise<T> {
   return Promise.race([
     p,
@@ -4412,35 +4484,18 @@ export default function ReportDetail({ reportId, onBack, isPublic = false }: Rep
 
   // ── Site Alerts — derived entirely from the gate evaluation output ────────
   // firedGates is the single source of truth: the same keys that set the ceiling
-  // set the alert. A zone with no fired gates produces no alerts.
-  const GATE_ALERT: Record<string, { level: 'critical' | 'warning'; message: string }> = {
-    'wt<18in':             { level: 'critical', message: 'Shallow water table — conventional system unlikely to pass nationally' },
-    'wt18-24in':           { level: 'warning',  message: 'Moderately shallow water table — investigate before ordering perc test' },
-    'wt24-36in':           { level: 'warning',  message: 'Water table at moderate depth — verify seasonal high before ordering perc test' },
-    'restr<20in(bedrock)': { level: 'critical', message: 'Shallow restrictive layer — insufficient depth for standard installation' },
-    'restr<20in(clay)':    { level: 'critical', message: 'Shallow clay horizon — conventional system unlikely without mound or alternative design' },
-    'restr20-36in':        { level: 'warning',  message: 'Restrictive layer at moderate depth — may limit system options' },
-    'flodfreq':            { level: 'critical', message: 'High flood risk — septic installation not recommended' },
-    'fema>25%':            { level: 'critical', message: 'High-risk flood zone — engineered system likely required' },
-    'fema10-25%':          { level: 'warning',  message: 'Partial flood zone — engineered system may be required' },
-    'wetland>25%':         { level: 'critical', message: 'Significant wetland overlap — regulatory approval unlikely' },
-    'wetland10-25%':       { level: 'warning',  message: 'Partial wetland overlap — verify boundaries before ordering test' },
-    'ksat_extreme':        { level: 'critical', message: 'Extreme soil permeability — effluent treatment not adequate' },
-    'slope>30%':           { level: 'critical', message: 'Excessive slope — drainfield installation not feasible' },
-    'slope15-30%':         { level: 'warning',  message: 'Steep slope — site-specific design likely needed' },
-  };
-
+  // set the alert. Alert text comes from BAND via GATE_BAND so it is guaranteed
+  // to match the factor bar copy for that band.
   const getSiteAlerts = (data: SoilHoverData | null): { criticals: string[]; warnings: string[] } => {
     if (!data) return { criticals: [], warnings: [] };
     const criticals: string[] = [];
     const warnings: string[] = [];
     for (const gate of data.firedGates) {
-      // Gate string format: "keypart→ceiling" (e.g. "wt18-24in→55")
       const key = gate.split('→')[0];
-      const alert = GATE_ALERT[key];
-      if (!alert) continue;
-      if (alert.level === 'critical') criticals.push(alert.message);
-      else warnings.push(alert.message);
+      const band = BAND[GATE_BAND[key]];
+      if (!band?.alertText || !band?.alertLevel) continue;
+      if (band.alertLevel === 'critical') criticals.push(band.alertText);
+      else warnings.push(band.alertText);
     }
     console.log('[alerts] mukey', data.mukey, 'gates_fired:', data.firedGates.join(' ') || 'none', 'alerts_emitted:', [...criticals, ...warnings].join(' | ') || 'none');
     return { criticals, warnings };
@@ -4931,7 +4986,14 @@ export default function ReportDetail({ reportId, onBack, isPublic = false }: Rep
               const sevIcon  = (s: Sev) => s === 'good' ? '✓' : '⚠';
               // Score-only severity (for bar fill minimum)
               const scoreSev = (v: number): Sev => v >= 75 ? 'good' : v >= 45 ? 'warning' : 'critical';
-              // Per-condition messages with explicit severity attached
+              // Per-condition messages — gated factors dispatch through BAND via GATE_BAND so the
+              // bar text and site alert text come from the same named band constant.
+              const firedKeys = (hudData?.firedGates ?? []).map(g => g.split('→')[0]);
+              const bandFor = (key: string): BandCopy | undefined => BAND[GATE_BAND[key]];
+              const firstFiredBand = (keys: string[]): BandCopy | undefined => {
+                for (const k of keys) { const b = bandFor(k); if (b) return b; }
+                return undefined;
+              };
               const factorMsg = (label: string, v: number | null): { text: string; sev: Sev } | null => {
                 if (v === null) return null;
                 if (label === 'Drainage') {
@@ -4942,19 +5004,23 @@ export default function ReportDetail({ reportId, onBack, isPublic = false }: Rep
                   return                { sev: 'critical', text: 'Poorly drained — high risk of system failure.' };
                 }
                 if (label === 'Permeability') {
+                  // ksat_extreme gate fires for both too-fast and too-slow extremes
+                  const kb = firedKeys.includes('ksat_extreme') ? bandFor('ksat_extreme') : undefined;
+                  if (kb) return { sev: kb.barSev, text: kb.barText };
                   if (v >= 80) return { sev: 'good',     text: 'Good permeability — ideal range for conventional absorption.' };
                   if (v >= 55) return { sev: 'warning',  text: 'Moderate-fast permeability — conventional systems generally approvable. Verify local design requirements.' };
                   return                { sev: 'critical', text: 'Low permeability — may require engineered system. Verify with local health department.' };
                 }
                 if (label === 'Slope') {
-                  if (v >= 80) return { sev: 'good',     text: 'Gentle slope — unlikely to constrain septic placement.' };
-                  if (v >= 55) return { sev: 'warning',  text: 'Moderate slope — site-specific engineering may be needed.' };
-                  return                { sev: 'critical', text: 'Steep slope — limits conventional drain field placement.' };
+                  const sb = firstFiredBand(['slope>30%', 'slope15-30%'].filter(k => firedKeys.includes(k)));
+                  if (sb) return { sev: sb.barSev, text: sb.barText };
+                  if (v >= 80) return { sev: BAND.slope_gentle.barSev,   text: BAND.slope_gentle.barText };
+                  return               { sev: BAND.slope_moderate.barSev, text: BAND.slope_moderate.barText };
                 }
                 if (label === 'Water table') {
-                  if (v >= 80) return { sev: 'good',     text: 'Deep water table — no concerns for septic design.' };
-                  if (v >= 55) return { sev: 'warning',  text: 'Moderate depth — worth investigating before testing.' };
-                  return                { sev: 'critical', text: 'Shallow water table — likely to affect septic design.' };
+                  const wb = firstFiredBand(['wt<18in', 'wt18-24in', 'wt24-36in'].filter(k => firedKeys.includes(k)));
+                  if (wb) return { sev: wb.barSev, text: wb.barText };
+                  return { sev: BAND.wt_deep.barSev, text: BAND.wt_deep.barText };
                 }
                 if (label === 'Ponding') {
                   if (v >= 80) return { sev: 'good',     text: 'Standing water not expected — favorable condition.' };
@@ -4962,20 +5028,24 @@ export default function ReportDetail({ reportId, onBack, isPublic = false }: Rep
                   return                { sev: 'critical', text: 'Frequent ponding likely — high risk for system failure.' };
                 }
                 if (label === 'Depth to restriction') {
-                  const isClayInferred = hudData.rawResdeptCm === null && hudData.clay40DepthCm !== null;
-                  if (isClayInferred && hudData.clay40DepthCm !== null) {
-                    const depthIn = Math.round(hudData.clay40DepthCm * 0.394);
-                    if (v >= 75) return { sev: 'warning',  text: `Inferred clay restriction at ~${depthIn} inches — verify on site.` };
-                    return              { sev: 'critical', text: `Inferred clay restriction at ~${depthIn} inches — conventional system unlikely without mound or alternative design.` };
+                  const rb = firstFiredBand(['restr<20in(bedrock)', 'restr<20in(clay)', 'restr20-36in'].filter(k => firedKeys.includes(k)));
+                  if (rb) {
+                    // For inferred clay, show measured depth in the bar text
+                    const isClayInferred = hudData.rawResdeptCm === null && hudData.clay40DepthCm !== null;
+                    if (isClayInferred && hudData.clay40DepthCm !== null && (firedKeys.includes('restr<20in(clay)') || firedKeys.includes('restr20-36in'))) {
+                      const depthIn = Math.round(hudData.clay40DepthCm * 0.394);
+                      return { sev: rb.barSev, text: `Inferred clay restriction at ~${depthIn} inches — ${rb.barSev === 'critical' ? 'conventional system unlikely without mound or alternative design.' : 'verify on site.'}` };
+                    }
+                    return { sev: rb.barSev, text: rb.barText };
                   }
-                  if (v >= 80) return { sev: 'good',     text: 'No shallow restrictive layers detected.' };
-                  if (v >= 55) return { sev: 'warning',  text: 'Moderate depth to restrictive layer — verify on site before testing.' };
-                  return                { sev: 'critical', text: 'Shallow restrictive layer — likely limits drain field depth.' };
+                  return { sev: BAND.restr_deep.barSev, text: BAND.restr_deep.barText };
                 }
                 if (label === 'Flooding') {
-                  if (v >= 80) return { sev: 'good',     text: 'Flooding not expected — no concerns.' };
-                  if (v >= 40) return { sev: 'warning',  text: 'Occasional flooding possible — verify buildable area.' };
-                  return                { sev: 'critical', text: 'Frequent flooding — unsuitable for conventional septic.' };
+                  const fb = firstFiredBand(['flodfreq'].filter(k => firedKeys.includes(k)));
+                  if (fb) return { sev: fb.barSev, text: fb.barText };
+                  if (v >= 80) return { sev: BAND.flood_none.barSev,      text: BAND.flood_none.barText };
+                  if (v >= 40) return { sev: BAND.flood_occasional.barSev, text: BAND.flood_occasional.barText };
+                  return               { sev: BAND.flood_frequent.barSev,  text: BAND.flood_frequent.barText };
                 }
                 return null;
               };
