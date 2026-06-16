@@ -1013,6 +1013,56 @@ function relativeDirection(centroid: [number, number], parcelFeature: turf.Featu
   return `${ns}-${ew}`;
 }
 
+// ---------------------------------------------------------------------------
+// DEM / terrain helpers — module-level so buildSoilPolygons can call them.
+// Pure: only touch their map/coordinate parameters, no component state.
+// ---------------------------------------------------------------------------
+
+async function waitForDEM(map: mapboxgl.Map, timeoutMs = 5000): Promise<{ ready: boolean; wasActive: boolean }> {
+  if (!map.getSource('mapbox-dem')) {
+    map.addSource('mapbox-dem', {
+      type: 'raster-dem',
+      url: 'mapbox://mapbox.mapbox-terrain-dem-v1',
+      tileSize: 512,
+      maxzoom: 14,
+    });
+  }
+  const wasActive = !!map.getTerrain();
+  if (!wasActive) {
+    map.setTerrain({ source: 'mapbox-dem', exaggeration: 1 });
+  }
+  const start = Date.now();
+  while (Date.now() - start < timeoutMs) {
+    const test = map.queryTerrainElevation(map.getCenter().toArray() as [number, number]);
+    if (test !== null && test !== 0) return { ready: true, wasActive };
+    await new Promise(r => setTimeout(r, 150));
+  }
+  return { ready: false, wasActive };
+}
+
+function cleanupDEM(map: mapboxgl.Map, wasActive: boolean) {
+  if (!wasActive) {
+    map.setTerrain(null);
+  }
+}
+
+function getActualSlope(map: mapboxgl.Map, lng: number, lat: number): number | null {
+  try {
+    const center = map.queryTerrainElevation([lng, lat]);
+    const north  = map.queryTerrainElevation([lng, lat + 0.00009]);
+    const south  = map.queryTerrainElevation([lng, lat - 0.00009]);
+    const east   = map.queryTerrainElevation([lng + 0.00011, lat]);
+    const west   = map.queryTerrainElevation([lng - 0.00011, lat]);
+    if (center === null || north === null || south === null || east === null || west === null) return null;
+    const rise_ns = Math.abs(north - south);
+    const rise_ew = Math.abs(east - west);
+    const maxRise = Math.max(rise_ns, rise_ew);
+    return (maxRise / 20) * 100;
+  } catch {
+    return null;
+  }
+}
+
 // Sample a grid of candidate points inside a polygon for DEM slope estimation.
 // Returns [lng, lat] pairs that fall within the polygon geometry.
 function samplePointsInPolygon(
@@ -3387,51 +3437,6 @@ function MapPanel({ reportId, cachedOverlayGeojson, parcelBoundary, isBboxFallba
         <p className="text-white/15 text-xs text-center px-6">Set MAPBOX_TOKEN in your Supabase project secrets to enable the map</p>
       </div>
     );
-  }
-
-  async function waitForDEM(map: mapboxgl.Map, timeoutMs = 5000): Promise<{ ready: boolean; wasActive: boolean }> {
-    if (!map.getSource('mapbox-dem')) {
-      map.addSource('mapbox-dem', {
-        type: 'raster-dem',
-        url: 'mapbox://mapbox.mapbox-terrain-dem-v1',
-        tileSize: 512,
-        maxzoom: 14,
-      });
-    }
-    const wasActive = !!map.getTerrain();
-    if (!wasActive) {
-      map.setTerrain({ source: 'mapbox-dem', exaggeration: 1 });
-    }
-    const start = Date.now();
-    while (Date.now() - start < timeoutMs) {
-      const test = map.queryTerrainElevation(map.getCenter().toArray() as [number, number]);
-      if (test !== null && test !== 0) return { ready: true, wasActive };
-      await new Promise(r => setTimeout(r, 150));
-    }
-    return { ready: false, wasActive };
-  }
-
-  function cleanupDEM(map: mapboxgl.Map, wasActive: boolean) {
-    if (!wasActive) {
-      map.setTerrain(null);
-    }
-  }
-
-  function getActualSlope(map: mapboxgl.Map, lng: number, lat: number): number | null {
-    try {
-      const center = map.queryTerrainElevation([lng, lat]);
-      const north  = map.queryTerrainElevation([lng, lat + 0.00009]);
-      const south  = map.queryTerrainElevation([lng, lat - 0.00009]);
-      const east   = map.queryTerrainElevation([lng + 0.00011, lat]);
-      const west   = map.queryTerrainElevation([lng - 0.00011, lat]);
-      if (center === null || north === null || south === null || east === null || west === null) return null;
-      const rise_ns = Math.abs(north - south);
-      const rise_ew = Math.abs(east - west);
-      const maxRise = Math.max(rise_ns, rise_ew);
-      return (maxRise / 20) * 100;
-    } catch {
-      return null;
-    }
   }
 
   function toggle3D() {
