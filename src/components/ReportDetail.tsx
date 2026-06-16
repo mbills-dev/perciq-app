@@ -184,14 +184,17 @@ function scoreSoilPolygon(
   })();
 
   // ── Factor B: Ksat (25%) ─────────────────────────────────────────────────
+  // Bands calibrated to perc-rate equivalents (mpi ≈ 425 / ksat µm/s).
+  // Gate boundary: ksat < 0.4 or > 150 µm/s → ksat_extreme (ceiling 39).
   const ksatScore = (() => {
-    if (ksat === null) return 50;
-    if (ksat >= 1.0 && ksat <= 6.0) return 100;   // ideal range
-    if (ksat >= 0.4 && ksat < 1.0) return 60;     // slightly slow
-    if (ksat > 6.0 && ksat <= 20.0) return 40;    // moderately fast
-    if (ksat > 20.0 && ksat <= 150.0) return 65;  // 7–30 min/inch — within EPA national conventional range
-    if (ksat < 0.4) return 10;                    // very slow — clay dominated
-    return 10;                                    // > 150 µm/s — gravel, no treatment capacity
+    if (ksat === null) return 55;                    // neutral when unknown
+    if (ksat < 0.4) return 10;                       // >1000 mpi — clay, won't drain
+    if (ksat < 4)   return 35;                       // 100–1000 mpi — conventional likely fails
+    if (ksat < 7)   return 60;                       // 60–100 mpi — borderline, design-dependent
+    if (ksat <= 30) return 90;                       // 15–60 mpi — IDEAL conventional range
+    if (ksat <= 80) return 70;                       // 5–15 mpi — moderate-fast, treatment OK
+    if (ksat <= 150) return 45;                      // 3–5 mpi — fast, treatment concerns
+    return 10;                                       // <3 mpi — gravel, no treatment capacity
   })();
 
   // ── Factor C: Slope (20%) ────────────────────────────────────────────────
@@ -1151,6 +1154,8 @@ async function buildSoilPolygons(
       clipped.properties.rawSlopePct = clipped.properties.slope_h != null ? parseFloat(clipped.properties.slope_h as string) || null : null;
       clipped.properties.clay40DepthCm = clipped.properties.clay40_depth_cm != null && clipped.properties.clay40_depth_cm !== 'null'
         ? parseFloat(clipped.properties.clay40_depth_cm as string) || null : null;
+      clipped.properties.rawKsat = clipped.properties.ksat_r != null ? parseFloat(clipped.properties.ksat_r as string) || null
+        : clipped.properties.ksat_h != null ? parseFloat(clipped.properties.ksat_h as string) || null : null;
       console.log('[alerts] mukey', mukeyStr, 'gates_fired:', scoredGates.length ? scoredGates.join(' ') : 'none', 'ceiling:', scoredCeiling);
 
       // Copy scoring properties onto a display copy of the full unclipped SSURGO polygon.
@@ -1364,6 +1369,7 @@ interface SoilHoverData {
   rawFlodfreqcl: string | null;
   rawSlopePct: number | null;
   clay40DepthCm: number | null;
+  rawKsat: number | null;
 }
 
 interface MapPanelProps {
@@ -2415,6 +2421,7 @@ function MapPanel({ reportId, cachedOverlayGeojson, parcelBoundary, isBboxFallba
           rawFlodfreqcl: p.rawFlodfreqcl != null && p.rawFlodfreqcl !== 'null' ? String(p.rawFlodfreqcl) : null,
           rawSlopePct: p.rawSlopePct != null && p.rawSlopePct !== 'null' ? Number(p.rawSlopePct) : null,
           clay40DepthCm: p.clay40DepthCm != null && p.clay40DepthCm !== 'null' ? Number(p.clay40DepthCm) : null,
+          rawKsat: p.rawKsat != null && p.rawKsat !== 'null' ? Number(p.rawKsat) : null,
         });
       });
       map.on('click', 'soil-fill', (e) => {
@@ -2444,6 +2451,7 @@ function MapPanel({ reportId, cachedOverlayGeojson, parcelBoundary, isBboxFallba
           rawFlodfreqcl: p.rawFlodfreqcl != null && p.rawFlodfreqcl !== 'null' ? String(p.rawFlodfreqcl) : null,
           rawSlopePct: p.rawSlopePct != null && p.rawSlopePct !== 'null' ? Number(p.rawSlopePct) : null,
           clay40DepthCm: p.clay40DepthCm != null && p.clay40DepthCm !== 'null' ? Number(p.clay40DepthCm) : null,
+          rawKsat: p.rawKsat != null && p.rawKsat !== 'null' ? Number(p.rawKsat) : null,
         });
       });
     } catch { /* ignore interaction setup errors */ } // end soil click/hover registration
@@ -4471,6 +4479,7 @@ export default function ReportDetail({ reportId, onBack, isPublic = false }: Rep
       rawFlodfreqcl: props.rawFlodfreqcl != null && props.rawFlodfreqcl !== 'null' ? String(props.rawFlodfreqcl) : null,
       rawSlopePct: props.rawSlopePct != null && props.rawSlopePct !== 'null' ? Number(props.rawSlopePct) : null,
       clay40DepthCm: props.clay40DepthCm != null && props.clay40DepthCm !== 'null' ? Number(props.clay40DepthCm) : null,
+      rawKsat: props.rawKsat != null && props.rawKsat !== 'null' ? Number(props.rawKsat) : null,
     };
   })();
 
@@ -4587,7 +4596,7 @@ export default function ReportDetail({ reportId, onBack, isPublic = false }: Rep
   const siteAlerts = getSiteAlerts(hudData);
   const isHovering = !!hudHover;
   const isLocked = !!hudLocked && !hudHover;
-  const activeSource = hudData ?? { drainScore: 0, ksatScore: 0, slopeScore: 0, wtScore: 0, pondingScore: null as number | null, restrictiveLayerScore: null as number | null, floodingScore: null as number | null, floodOverlapPct: 0, wetlandOverlapPct: 0, soilName: '—', finalScore: 0, bucket: 'no-data' as const, mukey: '', rawWatertableInches: null as number | null, rawResdeptCm: null as number | null, rawFlodfreqcl: null as string | null, rawSlopePct: null as number | null, clay40DepthCm: null as number | null };
+  const activeSource = hudData ?? { drainScore: 0, ksatScore: 0, slopeScore: 0, wtScore: 0, pondingScore: null as number | null, restrictiveLayerScore: null as number | null, floodingScore: null as number | null, floodOverlapPct: 0, wetlandOverlapPct: 0, soilName: '—', finalScore: 0, bucket: 'no-data' as const, mukey: '', rawWatertableInches: null as number | null, rawResdeptCm: null as number | null, rawFlodfreqcl: null as string | null, rawSlopePct: null as number | null, clay40DepthCm: null as number | null, rawKsat: null as number | null };
 
   const barColor = (v: number) => v >= 70 ? '#30D158' : v >= 45 ? '#FF9F0A' : '#FF453A';
   const bucketColor = (b: string) => b === 'viable' ? '#22C55E' : b === 'not-suitable' ? '#FF4539' : b === 'engineering-needed' ? '#FF9F09' : '#6B7280';
@@ -5004,12 +5013,18 @@ export default function ReportDetail({ reportId, onBack, isPublic = false }: Rep
                   return                { sev: 'critical', text: 'Poorly drained — high risk of system failure.' };
                 }
                 if (label === 'Permeability') {
-                  // ksat_extreme gate fires for both too-fast and too-slow extremes
-                  const kb = firedKeys.includes('ksat_extreme') ? bandFor('ksat_extreme') : undefined;
-                  if (kb) return { sev: kb.barSev, text: kb.barText };
-                  if (v >= 80) return { sev: 'good',     text: 'Good permeability — ideal range for conventional absorption.' };
-                  if (v >= 55) return { sev: 'warning',  text: 'Moderate-fast permeability — conventional systems generally approvable. Verify local design requirements.' };
-                  return                { sev: 'critical', text: 'Low permeability — may require engineered system. Verify with local health department.' };
+                  // ksat_extreme gate (ksat < 0.4 or > 150 µm/s): distinguish slow vs fast via raw ksat
+                  if (firedKeys.includes('ksat_extreme')) {
+                    const rawKsat = hudData.rawKsat;
+                    if (rawKsat !== null && rawKsat < 0.4) return { sev: 'critical', text: 'Very slow permeability — conventional septic will not function; engineered treatment required.' };
+                    return { sev: 'critical', text: 'Very fast permeability — effluent will not be treated; engineered system or alternate site required.' };
+                  }
+                  // Score-band copy — ordered highest to lowest to match ksatScore tiers
+                  if (v >= 85) return { sev: 'good',     text: 'Ideal permeability — favorable range for conventional septic absorption (~15–60 min/inch perc rate).' };
+                  if (v >= 65) return { sev: 'good',     text: 'Moderate-fast permeability — works for conventional systems; treatment adequate.' };
+                  if (v >= 55) return { sev: 'warning',  text: 'Borderline-slow permeability — conventional may pass but design-dependent; verify with local health department.' };
+                  if (v >= 40) return { sev: 'warning',  text: 'Fast permeability — treatment may be reduced before reaching groundwater; engineered system may be required.' };
+                  return                { sev: 'warning',  text: 'Slow permeability — likely fails conventional perc; engineered or alternative design needed.' };
                 }
                 if (label === 'Slope') {
                   const sb = firstFiredBand(['slope>30%', 'slope15-30%'].filter(k => firedKeys.includes(k)));

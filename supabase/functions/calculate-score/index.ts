@@ -115,13 +115,14 @@ function drainageFactor(drainagecl: string | null): number {
 }
 
 function ksatFactor(ksat: number | null): number {
-  if (ksat === null) return 50;
-  if (ksat >= 1.0 && ksat <= 6.0) return 100;
-  if (ksat >= 0.4 && ksat < 1.0) return 60;
-  if (ksat > 6.0 && ksat <= 20.0) return 40;
-  if (ksat > 20.0 && ksat <= 150.0) return 65;
-  if (ksat < 0.4) return 10;
-  return 10; // > 150 µm/s
+  if (ksat === null) return 55;                  // neutral when unknown
+  if (ksat < 0.4)   return 10;                  // >1000 mpi — clay, won't drain
+  if (ksat < 4)     return 35;                  // 100–1000 mpi — conventional likely fails
+  if (ksat < 7)     return 60;                  // 60–100 mpi — borderline, design-dependent
+  if (ksat <= 30)   return 90;                  // 15–60 mpi — IDEAL conventional range
+  if (ksat <= 80)   return 70;                  // 5–15 mpi — moderate-fast, treatment OK
+  if (ksat <= 150)  return 45;                  // 3–5 mpi — fast, treatment concerns
+  return 10;                                    // <3 mpi — gravel, no treatment capacity
 }
 
 // water_table_depth is in INCHES (converted at soil-query storage time)
