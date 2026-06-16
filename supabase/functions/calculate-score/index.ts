@@ -207,12 +207,16 @@ const BEDROCK_KINDS = [
   'duripan', 'cemented', 'ortstein', 'permafrost',
 ];
 
-function scoreSoilUnit(r: SoilResult, nearbyBoost: number): GatedScore {
+function scoreSoilUnit(r: SoilResult, nearbyBoost: number, demSlope: number | null): GatedScore {
+  // ── Resolved slope: DEM-derived zone median takes precedence over SSURGO ──
+  const rawSlopeSsurgoPct = r.slope_high;
+  const slopeForScoring   = demSlope ?? rawSlopeSsurgoPct;
+
   // ── Quality composite (4 factors, same weights as frontend) ──
   const ksatVal = r.ksat_r ?? r.ksat_high ?? r.ksat_low ?? null;
   const ds = drainageFactor(r.drainage_class);
   const ks = ksatFactor(ksatVal);
-  const ss = slopeFactor(r.slope_high);
+  const ss = slopeFactor(slopeForScoring);
   const wt = waterTableFactor(r.water_table_depth, r.drainage_class);
   const qualityComposite = ds * 0.35 + ks * 0.25 + ss * 0.20 + wt * 0.20;
 
@@ -270,13 +274,12 @@ function scoreSoilUnit(r: SoilResult, nearbyBoost: number): GatedScore {
     firedGates.push(`ksat_extreme→${GATE_CEIL.KSAT_EXTREME}`);
   }
 
-  // Slope — slope_high in percent
-  const slope = r.slope_high;
-  if (slope !== null) {
-    if (slope > 30) {
+  // Slope gate — uses resolved slope (DEM-first, SSURGO fallback)
+  if (slopeForScoring !== null) {
+    if (slopeForScoring > 30) {
       ceiling = Math.min(ceiling, GATE_CEIL.SLOPE_SEVERE);
       firedGates.push(`slope>30%→${GATE_CEIL.SLOPE_SEVERE}`);
-    } else if (slope >= 15) {
+    } else if (slopeForScoring >= 15) {
       ceiling = Math.min(ceiling, GATE_CEIL.SLOPE_STEEP);
       firedGates.push(`slope15-30%→${GATE_CEIL.SLOPE_STEEP}`);
     }
@@ -300,6 +303,7 @@ function scoreSoilUnit(r: SoilResult, nearbyBoost: number): GatedScore {
   console.log(
     `[edge-score] mukey:${r.map_unit_key} quality_composite:${qualityComposite.toFixed(1)}` +
     ` ceiling:${ceiling} gates:${firedGates.length ? firedGates.join(' ') : 'none'}` +
+    ` rawSlopeSsurgo:${rawSlopeSsurgoPct} zoneSlopeDem:${demSlope} slopeUsed:${slopeForScoring} (${demSlope !== null ? 'DEM' : 'SSURGO'})` +
     ` nrcs_features:${r.nrcs_septic_rating ?? 'none'} final_SI:${finalSI}`
   );
 
@@ -427,7 +431,7 @@ Deno.serve(async (req: Request) => {
       });
     }
 
-    const body = await req.json() as { report_id: string };
+    const body = await req.json() as { report_id: string; demSlopeByMukey?: Record<string, number | null> };
     if (!body.report_id) {
       return new Response(JSON.stringify({ error: "report_id is required" }), {
         status: 400,
@@ -435,7 +439,7 @@ Deno.serve(async (req: Request) => {
       });
     }
 
-    const { report_id } = body;
+    const { report_id, demSlopeByMukey = {} } = body;
 
     const { data: report, error: reportErr } = await supabaseClient
       .from("reports")
@@ -530,7 +534,10 @@ Deno.serve(async (req: Request) => {
     const nearbyBoostPts = nearbyPassing1mi.length >= 3 ? 7 : 0;
 
     // Score each soil map unit with the gated model
-    const unitScores = soilResults.map((r) => scoreSoilUnit(r, nearbyBoostPts));
+    const unitScores = soilResults.map((r) => {
+      const demSlope = r.map_unit_key != null ? (demSlopeByMukey[r.map_unit_key] ?? null) : null;
+      return scoreSoilUnit(r, nearbyBoostPts, demSlope);
+    });
 
     // Coverage-weighted average of final_SI across all map units (parcel-level score)
     const totalPct = unitScores.reduce((s, u) => s + u.pctCoverage, 0);

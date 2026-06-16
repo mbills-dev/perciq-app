@@ -149,9 +149,12 @@ function scoreSoilPolygon(
     || parseFloat(props.ksat_l as string)
     || null;
 
-  const slope = parseFloat(props.slope_h as string)
-    || parseFloat(props.slope_r as string)
-    || null;
+  // Resolved slope: DEM-derived zone median takes precedence over SSURGO county-averaged.
+  // Both fields are set by buildSoilPolygons before calling this function.
+  const rawSlopeSsurgoPct = parseFloat(props.rawSlopeSsurgoPct as string) || parseFloat(props.slope_h as string) || parseFloat(props.slope_r as string) || null;
+  const zoneSlopeDemPct   = props.zoneSlopeDemPct != null && props.zoneSlopeDemPct !== 'null'
+    ? (parseFloat(props.zoneSlopeDemPct as string) || null) : null;
+  const slope = zoneSlopeDemPct ?? rawSlopeSsurgoPct;
 
   const watertable = parseFloat(props.wtdepannmin as string)
     || parseFloat(props.watertbl as string)
@@ -166,7 +169,11 @@ function scoreSoilPolygon(
 
   if (!_loggedBucketMukeys.has(mukey)) {
     _loggedBucketMukeys.add(mukey);
-    console.log('[score] mukey:', mukey, 'drain:', drainagecl, 'ksat:', ksat, 'slope:', slope, 'watertable:', watertable, 'ponding:', pondfreqcl, 'flooding:', flodfreqcl, 'resdept:', resdept_r, 'reskind:', reskind);
+    const slopeSource = zoneSlopeDemPct !== null ? 'DEM' : 'SSURGO';
+    console.log('[score] mukey:', mukey, 'drain:', drainagecl, 'ksat:', ksat,
+      'rawSlopeSsurgo:', rawSlopeSsurgoPct, 'zoneSlopeDem:', zoneSlopeDemPct,
+      'slopeUsed:', slope, `(${slopeSource})`,
+      'watertable:', watertable, 'ponding:', pondfreqcl, 'flooding:', flodfreqcl, 'resdept:', resdept_r, 'reskind:', reskind);
   }
 
   // ── Factor A: Drainage (35%) ──────────────────────────────────────────────
@@ -1006,6 +1013,26 @@ function relativeDirection(centroid: [number, number], parcelFeature: turf.Featu
   return `${ns}-${ew}`;
 }
 
+// Sample a grid of candidate points inside a polygon for DEM slope estimation.
+// Returns [lng, lat] pairs that fall within the polygon geometry.
+function samplePointsInPolygon(
+  poly: turf.Feature<turf.Polygon | turf.MultiPolygon>,
+  gridN = 3,
+): [number, number][] {
+  const [minLng, minLat, maxLng, maxLat] = turf.bbox(poly);
+  const pts: [number, number][] = [];
+  for (let r = 0; r < gridN; r++) {
+    for (let c = 0; c < gridN; c++) {
+      const lng = minLng + (maxLng - minLng) * ((c + 0.5) / gridN);
+      const lat = minLat + (maxLat - minLat) * ((r + 0.5) / gridN);
+      try {
+        if (turf.booleanPointInPolygon(turf.point([lng, lat]), poly)) pts.push([lng, lat]);
+      } catch { /* skip bad geometry */ }
+    }
+  }
+  return pts;
+}
+
 async function buildSoilPolygons(
   wfsFeatures: turf.Feature[],
   parcelBoundary: Record<string, unknown>,
@@ -1014,12 +1041,30 @@ async function buildSoilPolygons(
   wetlandFeatures: turf.Feature<turf.Polygon | turf.MultiPolygon>[],
   floodUnion: turf.Feature<turf.Polygon | turf.MultiPolygon> | null,
   wetlandUnion: turf.Feature<turf.Polygon | turf.MultiPolygon> | null,
+  map: mapboxgl.Map | null = null,
 ): Promise<SoilPolygon[]> {
   if (!wfsFeatures.length) return [];
 
   const resultByMukey = new Map<string, SoilResult>();
   for (const r of soilResults) {
     if (r.map_unit_key) resultByMukey.set(r.map_unit_key, r);
+  }
+
+  // ── DEM slope availability check ─────────────────────────────────────────
+  // Attempt to activate DEM with a 3s timeout (shorter than perc-pin's 5s since
+  // this runs during the background scoring pass, not a user-triggered action).
+  // If DEM isn't ready in time, all zones fall back to SSURGO slope gracefully.
+  let slopeFromDem: ((lng: number, lat: number) => number | null) | null = null;
+  if (map) {
+    const { ready: demReady } = await waitForDEM(map, 3000);
+    if (demReady) {
+      slopeFromDem = (lng, lat) => getActualSlope(map, lng, lat);
+      console.log('[score] DEM ready — zone slopes will use DEM sampling');
+    } else {
+      console.log('[score] DEM not ready within 3s — zone slopes will use SSURGO fallback');
+    }
+  } else {
+    console.log('[score] no map instance — zone slopes will use SSURGO fallback');
   }
 
   const parcelFeature = toParcelFeature(parcelBoundary);
@@ -1128,6 +1173,26 @@ async function buildSoilPolygons(
         };
       }
 
+      // ── Zone-level DEM slope ──────────────────────────────────────────────
+      // Sample DEM at a grid of points inside this polygon and take the median.
+      // Median is robust against single-cell outliers (cliff edges, data holes).
+      let zoneSlopeDemPct: number | null = null;
+      if (slopeFromDem) {
+        const pts = samplePointsInPolygon(clipped);
+        const slopes = pts
+          .map(([lng, lat]) => slopeFromDem!(lng, lat))
+          .filter((s): s is number => s !== null);
+        if (slopes.length > 0) {
+          slopes.sort((a, b) => a - b);
+          zoneSlopeDemPct = slopes[Math.floor(slopes.length / 2)];
+        }
+      }
+      const rawSlopeSsurgoPct = clipped.properties.slope_h != null
+        ? parseFloat(clipped.properties.slope_h as string) || null : null;
+      // Store both slope values on properties so scoreSoilPolygon can read them
+      clipped.properties.zoneSlopeDemPct = zoneSlopeDemPct;
+      clipped.properties.rawSlopeSsurgoPct = rawSlopeSsurgoPct;
+
       const scored = scoreSoilPolygon(clipped.properties as Record<string, unknown>, mukeyStr, floodUnion, floodFeatures, wetlandUnion, wetlandFeatures, clipped);
       const { bucket, finalScore, ceiling: scoredCeiling, firedGates: scoredGates, drainageScore, ksatScore, slopeScore, watertableScore, pondingScore, restrictiveLayerScore, floodingScore, floodOverlapPct, wetlandOverlapPct } = scored;
 
@@ -1151,7 +1216,8 @@ async function buildSoilPolygons(
       clipped.properties.rawWatertableInches = clipped.properties.wtdepannmin != null ? parseFloat(clipped.properties.wtdepannmin as string) || null : null;
       clipped.properties.rawResdeptCm = clipped.properties.resdept_r != null ? parseFloat(clipped.properties.resdept_r as string) || null : null;
       clipped.properties.rawFlodfreqcl = clipped.properties.flodfreqcl ?? null;
-      clipped.properties.rawSlopePct = clipped.properties.slope_h != null ? parseFloat(clipped.properties.slope_h as string) || null : null;
+      clipped.properties.rawSlopePct = clipped.properties.rawSlopeSsurgoPct ?? (clipped.properties.slope_h != null ? parseFloat(clipped.properties.slope_h as string) || null : null);
+      // zoneSlopeDemPct already stored on properties before scoreSoilPolygon was called
       clipped.properties.clay40DepthCm = clipped.properties.clay40_depth_cm != null && clipped.properties.clay40_depth_cm !== 'null'
         ? parseFloat(clipped.properties.clay40_depth_cm as string) || null : null;
       clipped.properties.rawKsat = clipped.properties.ksat_r != null ? parseFloat(clipped.properties.ksat_r as string) || null
@@ -1367,7 +1433,8 @@ interface SoilHoverData {
   rawWatertableInches: number | null;
   rawResdeptCm: number | null;
   rawFlodfreqcl: string | null;
-  rawSlopePct: number | null;
+  rawSlopePct: number | null;        // SSURGO county-averaged slope (fallback)
+  zoneSlopeDemPct: number | null;    // DEM-derived zone median slope (preferred)
   clay40DepthCm: number | null;
   rawKsat: number | null;
 }
@@ -1596,6 +1663,7 @@ function MapPanel({ reportId, cachedOverlayGeojson, parcelBoundary, isBboxFallba
   const soilResultsCountRef = useRef(0);
   // Holds the latest soilResults array so an in-flight scoring run can re-score with fresh data after it yields.
   const latestSoilResultsRef = useRef<SoilResult[]>([]);
+  const demSlopeByMukeyRef = useRef<Record<string, number | null>>({});
   const retrySoilLoadRef = useRef<(() => void) | null>(null);
   // Prevents zone selection from running more than once per parcel load
   const bestZoneRef = useRef<{ zones: BestZone[]; isFallbackZone: boolean } | null>(null);
@@ -2145,7 +2213,17 @@ function MapPanel({ reportId, cachedOverlayGeojson, parcelBoundary, isBboxFallba
       ? latestSoilResultsRef.current : results;
     console.log('[buildSoilPolygons] scoring with', scoringResults.length, 'tabular results (call had', results.length, ')');
     console.log('[clip] parcel geometry type passed in:', originalParcelFeature.geometry.type);
-    const soilPolygons = await buildSoilPolygons(soilFeatures, originalParcelFeature as unknown as Record<string, unknown>, scoringResults, floodFeatures, wetlandFeatures, femaScoring, nwiScoring);
+    const soilPolygons = await buildSoilPolygons(soilFeatures, originalParcelFeature as unknown as Record<string, unknown>, scoringResults, floodFeatures, wetlandFeatures, femaScoring, nwiScoring, mapRef.current);
+
+    // Build per-mukey DEM slope map to pass to the edge function so both engines
+    // use the same resolved slope value.  Null entries mean SSURGO fallback was used.
+    const demSlopeByMukey: Record<string, number | null> = {};
+    for (const poly of soilPolygons) {
+      const rawDem = poly.geojson.properties?.zoneSlopeDemPct;
+      demSlopeByMukey[poly.mukey] = rawDem != null && rawDem !== 'null' ? Number(rawDem) : null;
+    }
+    console.log('[score] demSlopeByMukey:', JSON.stringify(demSlopeByMukey));
+    demSlopeByMukeyRef.current = demSlopeByMukey;
     if (soilPolygons.length > 0) onSoilPolygonsReadyRef.current?.(soilPolygons);
     const exclusion = buildExclusionZone(boundary, results);
     if (!soilPolygons?.length) {
@@ -2420,6 +2498,7 @@ function MapPanel({ reportId, cachedOverlayGeojson, parcelBoundary, isBboxFallba
           rawResdeptCm: p.rawResdeptCm != null && p.rawResdeptCm !== 'null' ? Number(p.rawResdeptCm) : null,
           rawFlodfreqcl: p.rawFlodfreqcl != null && p.rawFlodfreqcl !== 'null' ? String(p.rawFlodfreqcl) : null,
           rawSlopePct: p.rawSlopePct != null && p.rawSlopePct !== 'null' ? Number(p.rawSlopePct) : null,
+          zoneSlopeDemPct: p.zoneSlopeDemPct != null && p.zoneSlopeDemPct !== 'null' ? Number(p.zoneSlopeDemPct) : null,
           clay40DepthCm: p.clay40DepthCm != null && p.clay40DepthCm !== 'null' ? Number(p.clay40DepthCm) : null,
           rawKsat: p.rawKsat != null && p.rawKsat !== 'null' ? Number(p.rawKsat) : null,
         });
@@ -2450,6 +2529,7 @@ function MapPanel({ reportId, cachedOverlayGeojson, parcelBoundary, isBboxFallba
           rawResdeptCm: p.rawResdeptCm != null && p.rawResdeptCm !== 'null' ? Number(p.rawResdeptCm) : null,
           rawFlodfreqcl: p.rawFlodfreqcl != null && p.rawFlodfreqcl !== 'null' ? String(p.rawFlodfreqcl) : null,
           rawSlopePct: p.rawSlopePct != null && p.rawSlopePct !== 'null' ? Number(p.rawSlopePct) : null,
+          zoneSlopeDemPct: p.zoneSlopeDemPct != null && p.zoneSlopeDemPct !== 'null' ? Number(p.zoneSlopeDemPct) : null,
           clay40DepthCm: p.clay40DepthCm != null && p.clay40DepthCm !== 'null' ? Number(p.clay40DepthCm) : null,
           rawKsat: p.rawKsat != null && p.rawKsat !== 'null' ? Number(p.rawKsat) : null,
         });
@@ -4157,7 +4237,7 @@ export default function ReportDetail({ reportId, onBack, isPublic = false }: Rep
       const scoreResp = await withTimeout(
         fetch(`${supabaseUrl}/functions/v1/calculate-score`, {
           method: 'POST', headers: hdrs,
-          body: JSON.stringify({ report_id: reportId }),
+          body: JSON.stringify({ report_id: reportId, demSlopeByMukey: demSlopeByMukeyRef.current }),
         }),
         30_000, 'calculate-score'
       );
@@ -4478,6 +4558,7 @@ export default function ReportDetail({ reportId, onBack, isPublic = false }: Rep
       rawResdeptCm: props.rawResdeptCm != null && props.rawResdeptCm !== 'null' ? Number(props.rawResdeptCm) : null,
       rawFlodfreqcl: props.rawFlodfreqcl != null && props.rawFlodfreqcl !== 'null' ? String(props.rawFlodfreqcl) : null,
       rawSlopePct: props.rawSlopePct != null && props.rawSlopePct !== 'null' ? Number(props.rawSlopePct) : null,
+      zoneSlopeDemPct: props.zoneSlopeDemPct != null && props.zoneSlopeDemPct !== 'null' ? Number(props.zoneSlopeDemPct) : null,
       clay40DepthCm: props.clay40DepthCm != null && props.clay40DepthCm !== 'null' ? Number(props.clay40DepthCm) : null,
       rawKsat: props.rawKsat != null && props.rawKsat !== 'null' ? Number(props.rawKsat) : null,
     };
@@ -4596,7 +4677,7 @@ export default function ReportDetail({ reportId, onBack, isPublic = false }: Rep
   const siteAlerts = getSiteAlerts(hudData);
   const isHovering = !!hudHover;
   const isLocked = !!hudLocked && !hudHover;
-  const activeSource = hudData ?? { drainScore: 0, ksatScore: 0, slopeScore: 0, wtScore: 0, pondingScore: null as number | null, restrictiveLayerScore: null as number | null, floodingScore: null as number | null, floodOverlapPct: 0, wetlandOverlapPct: 0, soilName: '—', finalScore: 0, bucket: 'no-data' as const, mukey: '', rawWatertableInches: null as number | null, rawResdeptCm: null as number | null, rawFlodfreqcl: null as string | null, rawSlopePct: null as number | null, clay40DepthCm: null as number | null, rawKsat: null as number | null };
+  const activeSource = hudData ?? { drainScore: 0, ksatScore: 0, slopeScore: 0, wtScore: 0, pondingScore: null as number | null, restrictiveLayerScore: null as number | null, floodingScore: null as number | null, floodOverlapPct: 0, wetlandOverlapPct: 0, soilName: '—', finalScore: 0, bucket: 'no-data' as const, mukey: '', rawWatertableInches: null as number | null, rawResdeptCm: null as number | null, rawFlodfreqcl: null as string | null, rawSlopePct: null as number | null, zoneSlopeDemPct: null as number | null, clay40DepthCm: null as number | null, rawKsat: null as number | null };
 
   const barColor = (v: number) => v >= 70 ? '#30D158' : v >= 45 ? '#FF9F0A' : '#FF453A';
   const bucketColor = (b: string) => b === 'viable' ? '#22C55E' : b === 'not-suitable' ? '#FF4539' : b === 'engineering-needed' ? '#FF9F09' : '#6B7280';
@@ -5027,10 +5108,16 @@ export default function ReportDetail({ reportId, onBack, isPublic = false }: Rep
                   return                { sev: 'warning',  text: 'Slow permeability — likely fails conventional perc; engineered or alternative design needed.' };
                 }
                 if (label === 'Slope') {
+                  // Determine slope source for annotation shown in the bar text
+                  const demSlope  = hudData.zoneSlopeDemPct;
+                  const ssurgoSlope = hudData.rawSlopePct;
+                  const resolvedSlope = demSlope ?? ssurgoSlope;
+                  const slopeSource  = demSlope !== null ? 'DEM-derived' : 'county-averaged';
+                  const slopeAnnotation = resolvedSlope !== null ? ` (${resolvedSlope.toFixed(1)}%, ${slopeSource})` : '';
                   const sb = firstFiredBand(['slope>30%', 'slope15-30%'].filter(k => firedKeys.includes(k)));
-                  if (sb) return { sev: sb.barSev, text: sb.barText };
-                  if (v >= 80) return { sev: BAND.slope_gentle.barSev,   text: BAND.slope_gentle.barText };
-                  return               { sev: BAND.slope_moderate.barSev, text: BAND.slope_moderate.barText };
+                  if (sb) return { sev: sb.barSev, text: sb.barText + slopeAnnotation };
+                  if (v >= 80) return { sev: BAND.slope_gentle.barSev,   text: BAND.slope_gentle.barText + slopeAnnotation };
+                  return               { sev: BAND.slope_moderate.barSev, text: BAND.slope_moderate.barText + slopeAnnotation };
                 }
                 if (label === 'Water table') {
                   const wb = firstFiredBand(['wt<18in', 'wt18-24in', 'wt24-36in'].filter(k => firedKeys.includes(k)));
