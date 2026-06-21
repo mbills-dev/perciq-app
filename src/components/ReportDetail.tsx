@@ -3894,7 +3894,9 @@ export default function ReportDetail({ reportId, onBack, isPublic = false }: Rep
   const mapboxTokenRef = useRef<string>('');
   const mapSnapshotRef = useRef<string | null>(null);
   const percPinsRef = useRef<PercPinData[]>([]);
+  const [demSlopeByMukey, setDemSlopeByMukey] = useState<Record<string, number | null>>({});
   const demSlopeByMukeyRef = useRef<Record<string, number | null>>({});
+  demSlopeByMukeyRef.current = demSlopeByMukey;
   const pipelineRanRef = useRef<string | null>(null);
   const boundaryFetchedRef = useRef(false);
   const isFetchingBoundaryRef = useRef(false);
@@ -5335,7 +5337,7 @@ export default function ReportDetail({ reportId, onBack, isPublic = false }: Rep
             }}
             onCoverageUpdate={handleCoverageUpdate}
             onSoilPolygonsReady={setMapSoilPolygons}
-            onDemSlopeReady={(slopes) => { demSlopeByMukeyRef.current = slopes; }}
+            onDemSlopeReady={setDemSlopeByMukey}
             onAllLayersReady={() => {
               console.log('[map] all layers ready — overlay dismissed');
               setMapLayersReady(true);
