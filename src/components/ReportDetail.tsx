@@ -1432,7 +1432,7 @@ function computeBestZones(
   };
 
   const MIN_SQM = 70;
-  const MIN_ZONE_AREA_SQM = 1000; // ~0.25 acres — filter out SSURGO boundary slivers
+  const MIN_ZONE_AREA_SQM = 300; // filter out SSURGO boundary slivers; 300 sqm supports small parcels
 
   // Sort by suitabilityScore desc, tiebreak by area — never pick not-suitable or no-data
   const candidates = soilPolygons
@@ -3927,8 +3927,8 @@ export default function ReportDetail({ reportId, onBack, isPublic = false }: Rep
   useEffect(() => {
     if (!mapLayersReady || mapSoilPolygons.length === 0 || scoreWrittenRef.current) return;
 
-    // Mirror computeBestZones candidate filter exactly: viable/engineering-needed, area >= 1000 sqm
-    const MIN_ZONE_AREA_SQM = 1000;
+    // Mirror computeBestZones candidate filter exactly: viable/engineering-needed, area >= 300 sqm
+    const MIN_ZONE_AREA_SQM = 300;
     let best = 0;
     for (const poly of mapSoilPolygons) {
       if (poly.bucket !== 'viable' && poly.bucket !== 'engineering-needed') continue;
@@ -4330,7 +4330,7 @@ export default function ReportDetail({ reportId, onBack, isPublic = false }: Rep
     // Best zone score: highest finalScore among viable/engineering-needed polygons only,
     // applying the same MIN_ZONE_AREA_SQM filter that computeBestZones uses so the
     // displayed score matches the zone actually selected as Primary.
-    const MIN_ZONE_AREA_SQM = 1000;
+    const MIN_ZONE_AREA_SQM = 300;
     let zoneScore: number | null = null;
     if (mapSoilPolygons.length > 0) {
       let best = 0;
@@ -4340,9 +4340,7 @@ export default function ReportDetail({ reportId, onBack, isPublic = false }: Rep
         const s = (poly.geojson.properties as Record<string, unknown>)?.suitabilityScore as number ?? 0;
         if (s > best) best = s;
       }
-      zoneScore = best > 0 ? best : convScore;
-    } else {
-      zoneScore = convScore;
+      zoneScore = best > 0 ? best : null;
     }
 
     // Parcel score: area-weighted average of suitabilityScore stored on polygon properties
@@ -4366,11 +4364,15 @@ export default function ReportDetail({ reportId, onBack, isPublic = false }: Rep
     const parcelScore = Math.round(Math.min(100, Math.max(0, baseParcelScore)));
 
     // Invariant: Best Zone score = max(final_SI); Parcel Overall = area-weighted mean.
-    // max >= mean always — log a warning if violated.
-    if (zoneScore !== null && parcelScore !== null && zoneScore < parcelScore) {
-      console.warn('[score] INVARIANT VIOLATED: Best Zone', zoneScore, '< Parcel Overall', parcelScore);
+    // max >= mean always — only check when a zone was actually placed (zoneScore non-null).
+    if (zoneScore !== null && parcelScore !== null) {
+      if (zoneScore < parcelScore) {
+        console.warn('[score] INVARIANT VIOLATED: Best Zone', zoneScore, '< Parcel Overall', parcelScore);
+      } else {
+        console.log('[score] Best Zone:', zoneScore, '>= Parcel Overall:', parcelScore, '✓');
+      }
     } else {
-      console.log('[score] Best Zone:', zoneScore, '>= Parcel Overall:', parcelScore, '✓');
+      console.log('[score] Best Zone: none placed — skipping invariant check. Parcel Overall:', parcelScore);
     }
     console.log('[score] parcel weighted base:', baseParcelScore.toFixed(1), 'final parcel score:', parcelScore);
 
