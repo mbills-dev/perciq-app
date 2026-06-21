@@ -956,14 +956,28 @@ export default function Dashboard({ onViewReport, onCreateReport, onNavigateSett
           <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 mb-3">
             <div className="flex items-center gap-2 flex-shrink-0">
               {selectionMode && (
-                <input
-                  type="checkbox"
-                  checked={allVisibleSelected}
-                  ref={el => { if (el) el.indeterminate = someVisibleSelected && !allVisibleSelected; }}
-                  onChange={toggleSelectAll}
-                  style={{ width: 15, height: 15, cursor: 'pointer', accentColor: '#30D158' }}
+                <label
+                  onClick={toggleSelectAll}
                   aria-label="Select all"
-                />
+                  style={{
+                    width: 20, height: 20, borderRadius: 6, flexShrink: 0, cursor: 'pointer',
+                    display: 'flex', alignItems: 'center', justifyContent: 'center',
+                    background: (allVisibleSelected || someVisibleSelected) ? '#34d399' : 'transparent',
+                    border: `1.5px solid ${(allVisibleSelected || someVisibleSelected) ? '#34d399' : 'rgba(148,163,184,0.4)'}`,
+                    transition: 'border-color 0.15s, background 0.15s',
+                  }}
+                >
+                  {allVisibleSelected && (
+                    <svg width="11" height="8" viewBox="0 0 11 8" fill="none">
+                      <path d="M1 4L4 7L10 1" stroke="white" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"/>
+                    </svg>
+                  )}
+                  {someVisibleSelected && !allVisibleSelected && (
+                    <svg width="10" height="2" viewBox="0 0 10 2" fill="none">
+                      <path d="M1 1H9" stroke="white" strokeWidth="1.8" strokeLinecap="round"/>
+                    </svg>
+                  )}
+                </label>
               )}
               <h3 style={{ fontSize: 14, fontWeight: 600, color: '#fff' }}>All parcels</h3>
               <span style={{
@@ -1106,12 +1120,34 @@ export default function Dashboard({ onViewReport, onCreateReport, onNavigateSett
                 >
                   {/* Main row */}
                   <div
-                    style={{ display: 'flex', alignItems: 'center', gap: 14, padding: '14px 20px', cursor: 'pointer' }}
+                    style={{ display: 'flex', alignItems: 'center', gap: 14, padding: selectionMode ? '14px 20px 14px 13px' : '14px 20px', cursor: 'pointer' }}
                     onClick={() => {
                       if (selectionMode) { toggleSelect(parcel.id); return; }
                       setExpandedId(isExpanded ? null : parcel.id);
                     }}
                   >
+                    {/* Per-row selection checkbox — left edge, only in selection mode */}
+                    {selectionMode && (
+                      <label
+                        onClick={e => { e.stopPropagation(); toggleSelect(parcel.id); }}
+                        aria-label={`Select ${parcel.address ?? parcel.apn ?? 'parcel'}`}
+                        style={{
+                          width: 20, height: 20, borderRadius: 6, flexShrink: 0, cursor: 'pointer',
+                          display: 'flex', alignItems: 'center', justifyContent: 'center',
+                          background: isSelected ? '#34d399' : 'transparent',
+                          border: `1.5px solid ${isSelected ? '#34d399' : 'rgba(148,163,184,0.4)'}`,
+                          transition: 'border-color 0.15s, background 0.15s',
+                        }}
+                        onMouseEnter={e => { if (!isSelected) (e.currentTarget as HTMLElement).style.borderColor = 'rgba(148,163,184,0.65)'; }}
+                        onMouseLeave={e => { if (!isSelected) (e.currentTarget as HTMLElement).style.borderColor = 'rgba(148,163,184,0.4)'; }}
+                      >
+                        {isSelected && (
+                          <svg width="11" height="8" viewBox="0 0 11 8" fill="none">
+                            <path d="M1 4L4 7L10 1" stroke="white" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"/>
+                          </svg>
+                        )}
+                      </label>
+                    )}
                     {/* Dot */}
                     <div style={{ width: 8, height: 8, borderRadius: '50%', background: dotColor, flexShrink: 0, boxShadow: `0 0 6px ${dotColor}80` }} />
 
@@ -1138,29 +1174,19 @@ export default function Dashboard({ onViewReport, onCreateReport, onNavigateSett
 
                     {/* Action buttons */}
                     <div className="hidden sm:flex items-center gap-2 flex-shrink-0" onClick={e => e.stopPropagation()}>
-                      {selectionMode ? (
-                        <input
-                          type="checkbox"
-                          checked={isSelected}
-                          onChange={() => toggleSelect(parcel.id)}
-                          style={{ width: 16, height: 16, cursor: 'pointer', accentColor: '#30D158' }}
-                          aria-label={`Select ${parcel.address ?? parcel.apn ?? 'parcel'}`}
-                        />
-                      ) : (
-                        <button
-                          onClick={() => handleOpenMap(row)}
-                          style={{
-                            display: 'flex', alignItems: 'center', gap: 5,
-                            background: 'rgba(48,209,88,0.12)',
-                            border: '1px solid rgba(48,209,88,0.5)',
-                            borderRadius: 7, padding: '6px 12px',
-                            color: '#30D158', fontSize: 12, fontWeight: 600, cursor: 'pointer',
-                          }}
-                        >
-                          <MapIcon className="w-3.5 h-3.5" />
-                          Open map
-                        </button>
-                      )}
+                      <button
+                        onClick={() => handleOpenMap(row)}
+                        style={{
+                          display: 'flex', alignItems: 'center', gap: 5,
+                          background: 'rgba(48,209,88,0.12)',
+                          border: '1px solid rgba(48,209,88,0.5)',
+                          borderRadius: 7, padding: '6px 12px',
+                          color: '#30D158', fontSize: 12, fontWeight: 600, cursor: 'pointer',
+                        }}
+                      >
+                        <MapIcon className="w-3.5 h-3.5" />
+                        Open map
+                      </button>
                     </div>
 
                     {/* Expand chevron */}
