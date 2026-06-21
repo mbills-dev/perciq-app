@@ -3,7 +3,7 @@ import { supabase } from '../lib/supabase';
 import type { Parcel } from '../types/database';
 import {
   Plus, MapPin, Search, Trash2, FileText,
-  AlertCircle, X, ArrowRight, Loader2, CheckCircle2, Pencil,
+  AlertCircle, X, ArrowRight, Loader2, CheckCircle2,
 } from 'lucide-react';
 
 interface ParcelsPageProps {
@@ -40,8 +40,14 @@ export default function ParcelsPage({ onCreateReport, onViewParcel }: ParcelsPag
   const [query, setQuery] = useState('');
   const [step, setStep] = useState<AddStep>({ phase: 'idle' });
   const [deleteId, setDeleteId] = useState<string | null>(null);
-  const [editId, setEditId] = useState<string | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
+
+  // Bulk selection state
+  const [selectionMode, setSelectionMode] = useState(false);
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [showBulkDeleteModal, setShowBulkDeleteModal] = useState(false);
+  const [bulkDeleteError, setBulkDeleteError] = useState<string | null>(null);
+  const [bulkDeleting, setBulkDeleting] = useState(false);
 
   useEffect(() => { loadParcels(); }, []);
 
@@ -73,7 +79,6 @@ export default function ParcelsPage({ onCreateReport, onViewParcel }: ParcelsPag
       const { data: { session } } = await supabase.auth.getSession();
       if (!session) throw new Error('Not authenticated');
 
-      // Geocode step visible to user
       const supabaseUrl = import.meta.env.VITE_SUPABASE_URL as string;
       const headers = {
         'Authorization': `Bearer ${session.access_token}`,
@@ -108,7 +113,45 @@ export default function ParcelsPage({ onCreateReport, onViewParcel }: ParcelsPag
     await supabase.from('parcels').delete().eq('id', parcelId);
     setParcels((prev) => prev.filter((p) => p.id !== parcelId));
     setDeleteId(null);
-    setEditId(null);
+  }
+
+  async function handleBulkDelete() {
+    setBulkDeleting(true);
+    setBulkDeleteError(null);
+    try {
+      const ids = Array.from(selectedIds);
+      const { error } = await supabase.from('parcels').delete().in('id', ids);
+      if (error) throw new Error(error.message);
+      await loadParcels();
+      setSelectedIds(new Set());
+      setSelectionMode(false);
+      setShowBulkDeleteModal(false);
+    } catch (e) {
+      setBulkDeleteError((e as Error).message);
+    } finally {
+      setBulkDeleting(false);
+    }
+  }
+
+  function enterSelectionMode() {
+    setSelectionMode(true);
+    setSelectedIds(new Set());
+    setBulkDeleteError(null);
+  }
+
+  function exitSelectionMode() {
+    setSelectionMode(false);
+    setSelectedIds(new Set());
+    setBulkDeleteError(null);
+  }
+
+  function toggleSelect(id: string) {
+    setSelectedIds(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
   }
 
   const filtered = parcels.filter((p) => {
@@ -122,13 +165,28 @@ export default function ParcelsPage({ onCreateReport, onViewParcel }: ParcelsPag
     );
   });
 
-  const isRunning = step.phase === 'geocoding' || step.phase === 'boundary' || step.phase === 'saving';
+  const allVisibleSelected = filtered.length > 0 && filtered.every(p => selectedIds.has(p.id));
+  const someVisibleSelected = filtered.some(p => selectedIds.has(p.id));
 
-  const stepLabel: Record<string, string> = {
-    geocoding: 'Looking up address...',
-    boundary: 'Fetching parcel boundary...',
-    saving: 'Creating report...',
-  };
+  function toggleSelectAll() {
+    if (allVisibleSelected) {
+      // deselect all visible
+      setSelectedIds(prev => {
+        const next = new Set(prev);
+        filtered.forEach(p => next.delete(p.id));
+        return next;
+      });
+    } else {
+      // select all visible
+      setSelectedIds(prev => {
+        const next = new Set(prev);
+        filtered.forEach(p => next.add(p.id));
+        return next;
+      });
+    }
+  }
+
+  const isRunning = step.phase === 'geocoding' || step.phase === 'boundary' || step.phase === 'saving';
 
   return (
     <div className="space-y-6 max-w-5xl">
@@ -138,13 +196,43 @@ export default function ParcelsPage({ onCreateReport, onViewParcel }: ParcelsPag
           <h2 className="text-xl font-semibold mb-1">Parcels</h2>
           <p className="text-white/40 text-sm">Manage land parcels for soil analysis.</p>
         </div>
-        <button
-          onClick={() => setShowModal(true)}
-          className="btn-primary flex items-center gap-2"
-        >
-          <Plus className="w-4 h-4" />
-          Add Parcel
-        </button>
+        <div className="flex items-center gap-2">
+          {selectionMode ? (
+            <>
+              <button
+                onClick={() => setShowBulkDeleteModal(true)}
+                disabled={selectedIds.size === 0}
+                className="flex items-center gap-2 bg-danger-500 hover:bg-danger-600 disabled:opacity-30 disabled:cursor-not-allowed text-white text-sm font-medium px-4 py-2 rounded-lg transition-colors"
+              >
+                <Trash2 className="w-4 h-4" />
+                {selectedIds.size > 0 ? `Delete ${selectedIds.size} parcel${selectedIds.size !== 1 ? 's' : ''}` : 'Delete selected'}
+              </button>
+              <button
+                onClick={exitSelectionMode}
+                className="btn-ghost flex items-center gap-2"
+              >
+                <X className="w-4 h-4" />
+                Cancel
+              </button>
+            </>
+          ) : (
+            <>
+              <button
+                onClick={enterSelectionMode}
+                className="btn-ghost flex items-center gap-2 text-sm"
+              >
+                Manage
+              </button>
+              <button
+                onClick={() => setShowModal(true)}
+                className="btn-primary flex items-center gap-2"
+              >
+                <Plus className="w-4 h-4" />
+                Add Parcel
+              </button>
+            </>
+          )}
+        </div>
       </div>
 
       {/* Table search */}
@@ -183,6 +271,18 @@ export default function ParcelsPage({ onCreateReport, onViewParcel }: ParcelsPag
           <table className="w-full text-sm">
             <thead>
               <tr className="border-b border-white/5">
+                {selectionMode && (
+                  <th className="pl-5 py-3 w-10">
+                    <input
+                      type="checkbox"
+                      checked={allVisibleSelected}
+                      ref={el => { if (el) el.indeterminate = someVisibleSelected && !allVisibleSelected; }}
+                      onChange={toggleSelectAll}
+                      className="w-4 h-4 rounded accent-primary-500 cursor-pointer"
+                      aria-label="Select all"
+                    />
+                  </th>
+                )}
                 <th className="text-left px-5 py-3 text-xs font-medium text-white/40 uppercase tracking-wide">Address / APN</th>
                 <th className="text-left px-5 py-3 text-xs font-medium text-white/40 uppercase tracking-wide hidden md:table-cell">Location</th>
                 <th className="text-left px-5 py-3 text-xs font-medium text-white/40 uppercase tracking-wide hidden lg:table-cell">Owner</th>
@@ -191,80 +291,75 @@ export default function ParcelsPage({ onCreateReport, onViewParcel }: ParcelsPag
               </tr>
             </thead>
             <tbody className="divide-y divide-white/5">
-              {filtered.map((parcel) => (
-                <tr key={parcel.id} className="hover:bg-white/3 transition-colors">
-                  <td className="px-5 py-4">
-                    <p className="font-medium text-white">
-                      {parcel.address ?? <span className="text-white/30 italic">No address</span>}
-                    </p>
-                    {parcel.apn && (
-                      <p className="text-xs text-white/40 mt-0.5">APN: {parcel.apn}</p>
+              {filtered.map((parcel) => {
+                const isSelected = selectedIds.has(parcel.id);
+                return (
+                  <tr
+                    key={parcel.id}
+                    className={`transition-colors ${
+                      isSelected
+                        ? 'bg-primary-500/8 border-l-2 border-l-primary-500'
+                        : 'hover:bg-white/3 border-l-2 border-l-transparent'
+                    }`}
+                  >
+                    {selectionMode && (
+                      <td className="pl-5 py-4 w-10">
+                        <input
+                          type="checkbox"
+                          checked={isSelected}
+                          onChange={() => toggleSelect(parcel.id)}
+                          className="w-4 h-4 rounded accent-primary-500 cursor-pointer"
+                          aria-label={`Select ${parcel.address ?? parcel.apn ?? 'parcel'}`}
+                        />
+                      </td>
                     )}
-                  </td>
-                  <td className="px-5 py-4 hidden md:table-cell">
-                    <p className="text-white/70">
-                      {[parcel.county, parcel.state].filter(Boolean).join(', ') || (
-                        <span className="text-white/30 italic">Unknown</span>
+                    <td className="px-5 py-4">
+                      <p className="font-medium text-white">
+                        {parcel.address ?? <span className="text-white/30 italic">No address</span>}
+                      </p>
+                      {parcel.apn && (
+                        <p className="text-xs text-white/40 mt-0.5">APN: {parcel.apn}</p>
                       )}
-                    </p>
-                  </td>
-                  <td className="px-5 py-4 hidden lg:table-cell">
-                    <p className="text-white/60 text-xs">
-                      {parcel.owner ?? <span className="text-white/20">—</span>}
-                    </p>
-                  </td>
-                  <td className="px-5 py-4 hidden lg:table-cell">
-                    <p className="text-white/70">
-                      {parcel.acreage != null
-                        ? `${parcel.acreage.toFixed(2)} ac`
-                        : <span className="text-white/30">—</span>}
-                    </p>
-                  </td>
-                  <td className="px-5 py-4">
-                    <div className="flex items-center gap-2 justify-end">
-                      {editId === parcel.id ? (
-                        <>
-                          <button
-                            onClick={() => setDeleteId(parcel.id)}
-                            className="flex items-center gap-1.5 text-xs text-danger-400 hover:text-danger-300 font-medium transition-colors"
-                          >
-                            <Trash2 className="w-3.5 h-3.5" />
-                            <span className="hidden sm:inline">Delete</span>
-                          </button>
-                          <button
-                            onClick={() => setEditId(null)}
-                            className="text-white/30 hover:text-white transition-colors p-1"
-                          >
-                            <X className="w-3.5 h-3.5" />
-                          </button>
-                        </>
-                      ) : (
-                        <>
-                          <button
-                            onClick={() => onViewParcel(parcel.id)}
-                            className="flex items-center gap-1.5 text-xs text-primary-400 hover:text-primary-300 font-medium transition-colors"
-                          >
-                            <FileText className="w-3.5 h-3.5" />
-                            <span className="hidden sm:inline">View</span>
-                          </button>
-                          <button
-                            onClick={() => setEditId(parcel.id)}
-                            className="text-white/20 hover:text-white/60 transition-colors p-1"
-                          >
-                            <Pencil className="w-3.5 h-3.5" />
-                          </button>
-                        </>
-                      )}
-                    </div>
-                  </td>
-                </tr>
-              ))}
+                    </td>
+                    <td className="px-5 py-4 hidden md:table-cell">
+                      <p className="text-white/70">
+                        {[parcel.county, parcel.state].filter(Boolean).join(', ') || (
+                          <span className="text-white/30 italic">Unknown</span>
+                        )}
+                      </p>
+                    </td>
+                    <td className="px-5 py-4 hidden lg:table-cell">
+                      <p className="text-white/60 text-xs">
+                        {parcel.owner ?? <span className="text-white/20">—</span>}
+                      </p>
+                    </td>
+                    <td className="px-5 py-4 hidden lg:table-cell">
+                      <p className="text-white/70">
+                        {parcel.acreage != null
+                          ? `${parcel.acreage.toFixed(2)} ac`
+                          : <span className="text-white/30">—</span>}
+                      </p>
+                    </td>
+                    <td className="px-5 py-4">
+                      <div className="flex items-center gap-2 justify-end">
+                        <button
+                          onClick={() => onViewParcel(parcel.id)}
+                          className="flex items-center gap-1.5 text-xs text-primary-400 hover:text-primary-300 font-medium transition-colors"
+                        >
+                          <FileText className="w-3.5 h-3.5" />
+                          <span className="hidden sm:inline">View</span>
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
         )}
       </div>
 
-      {/* Add Parcel Modal — single search input */}
+      {/* Add Parcel Modal */}
       {showModal && (
         <div className="fixed inset-0 bg-black/70 z-50 flex items-center justify-center p-4 backdrop-blur-sm">
           <div className="card w-full max-w-lg p-6">
@@ -384,7 +479,7 @@ export default function ParcelsPage({ onCreateReport, onViewParcel }: ParcelsPag
         </div>
       )}
 
-      {/* Delete confirm */}
+      {/* Single parcel delete confirm (legacy path — kept for direct deletion if needed) */}
       {deleteId && (
         <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4">
           <div className="card w-full max-w-sm p-6 text-center">
@@ -401,6 +496,48 @@ export default function ParcelsPage({ onCreateReport, onViewParcel }: ParcelsPag
                 onClick={() => handleDelete(deleteId)}
                 className="flex-1 bg-danger-500 hover:bg-danger-600 text-white font-medium px-4 py-2 rounded-lg transition-colors"
               >
+                Delete
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Bulk delete confirm modal */}
+      {showBulkDeleteModal && (
+        <div className="fixed inset-0 bg-black/70 z-50 flex items-center justify-center p-4 backdrop-blur-sm">
+          <div className="card w-full max-w-sm p-6 text-center">
+            <div className="w-12 h-12 bg-danger-500/10 rounded-xl flex items-center justify-center mx-auto mb-4">
+              <Trash2 className="w-6 h-6 text-danger-400" />
+            </div>
+            <h3 className="font-semibold mb-2">
+              Delete {selectedIds.size} parcel{selectedIds.size !== 1 ? 's' : ''}?
+            </h3>
+            <p className="text-white/40 text-sm mb-5">
+              This will also delete all associated reports and soil data. This cannot be undone.
+            </p>
+
+            {bulkDeleteError && (
+              <div className="mb-4 flex items-start gap-2.5 bg-danger-500/10 border border-danger-500/30 rounded-lg p-3 text-left">
+                <AlertCircle className="w-4 h-4 text-danger-400 mt-0.5 flex-shrink-0" />
+                <p className="text-xs text-danger-400">{bulkDeleteError}</p>
+              </div>
+            )}
+
+            <div className="flex gap-3">
+              <button
+                onClick={() => { setShowBulkDeleteModal(false); setBulkDeleteError(null); }}
+                disabled={bulkDeleting}
+                className="btn-ghost flex-1"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleBulkDelete}
+                disabled={bulkDeleting}
+                className="flex-1 bg-danger-500 hover:bg-danger-600 disabled:opacity-60 text-white font-medium px-4 py-2 rounded-lg transition-colors flex items-center justify-center gap-2"
+              >
+                {bulkDeleting && <Loader2 className="w-4 h-4 animate-spin" />}
                 Delete
               </button>
             </div>
