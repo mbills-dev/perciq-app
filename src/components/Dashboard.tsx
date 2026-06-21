@@ -3,7 +3,7 @@ import { supabase } from '../lib/supabase';
 import type { Parcel, Report, PlanTier } from '../types/database';
 import { PLAN_LIMITS } from '../types/database';
 import {
-  Plus, Search, Trash2, Pencil, Map as MapIcon, ChevronDown, ChevronUp,
+  Plus, Search, Trash2, Map as MapIcon, ChevronDown, ChevronUp,
   AlertCircle, Loader2, ArrowRight, X, CheckCircle2, Zap,
 } from 'lucide-react';
 import CountyAutocomplete from './CountyAutocomplete';
@@ -706,9 +706,12 @@ export default function Dashboard({ onViewReport, onCreateReport, onNavigateSett
   const [search, setSearch] = useState('');
   const [filter, setFilter] = useState<FilterTab>('all');
   const [expandedId, setExpandedId] = useState<string | null>(null);
-  const [deleteId, setDeleteId] = useState<string | null>(null);
-  const [editId, setEditId] = useState<string | null>(null);
   const [showModal, setShowModal] = useState(false);
+  const [selectionMode, setSelectionMode] = useState(false);
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [showBulkDeleteModal, setShowBulkDeleteModal] = useState(false);
+  const [bulkDeleteError, setBulkDeleteError] = useState<string | null>(null);
+  const [bulkDeleting, setBulkDeleting] = useState(false);
   const [showLimitModal, setShowLimitModal] = useState(false);
   const [userPlan, setUserPlan] = useState<PlanTier>('free');
   const [analysesUsed, setAnalysesUsed] = useState(0);
@@ -773,12 +776,43 @@ export default function Dashboard({ onViewReport, onCreateReport, onNavigateSett
     }
   }
 
-  async function handleDelete(parcelId: string) {
-    await supabase.from('parcels').delete().eq('id', parcelId);
-    setRows(prev => prev.filter(r => r.parcel.id !== parcelId));
-    setDeleteId(null);
-    setEditId(null);
-    if (expandedId === parcelId) setExpandedId(null);
+  function enterSelectionMode() {
+    setSelectionMode(true);
+    setSelectedIds(new Set());
+    setBulkDeleteError(null);
+  }
+
+  function exitSelectionMode() {
+    setSelectionMode(false);
+    setSelectedIds(new Set());
+    setBulkDeleteError(null);
+  }
+
+  function toggleSelect(id: string) {
+    setSelectedIds(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
+
+  async function handleBulkDelete() {
+    setBulkDeleting(true);
+    setBulkDeleteError(null);
+    try {
+      const ids = Array.from(selectedIds);
+      const { error } = await supabase.from('parcels').delete().in('id', ids);
+      if (error) throw new Error(error.message);
+      await loadData();
+      setSelectedIds(new Set());
+      setSelectionMode(false);
+      setShowBulkDeleteModal(false);
+    } catch (e) {
+      setBulkDeleteError((e as Error).message);
+    } finally {
+      setBulkDeleting(false);
+    }
   }
 
   function handleOpenMap(row: ParcelRow) {
@@ -822,6 +856,25 @@ export default function Dashboard({ onViewReport, onCreateReport, onNavigateSett
     { id: 'marginal', label: 'Marginal', tint: 'rgba(255,159,10,0.10)', border: 'rgba(255,159,10,0.40)', color: '#FF9F0A' },
     { id: 'unsuitable', label: 'Unsuitable', tint: 'rgba(255,69,58,0.10)', border: 'rgba(255,69,58,0.40)', color: '#FF453A' },
   ];
+
+  const allVisibleSelected = visible.length > 0 && visible.every(r => selectedIds.has(r.parcel.id));
+  const someVisibleSelected = visible.some(r => selectedIds.has(r.parcel.id));
+
+  function toggleSelectAll() {
+    if (allVisibleSelected) {
+      setSelectedIds(prev => {
+        const next = new Set(prev);
+        visible.forEach(r => next.delete(r.parcel.id));
+        return next;
+      });
+    } else {
+      setSelectedIds(prev => {
+        const next = new Set(prev);
+        visible.forEach(r => next.add(r.parcel.id));
+        return next;
+      });
+    }
+  }
 
   // Score distribution
   const analyzed = rows.filter(r => r.report?.status === 'complete').length;
@@ -902,6 +955,16 @@ export default function Dashboard({ onViewReport, onCreateReport, onNavigateSett
         <div style={{ padding: '16px 20px 12px', borderBottom: '1px solid rgba(255,255,255,0.06)' }}>
           <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 mb-3">
             <div className="flex items-center gap-2 flex-shrink-0">
+              {selectionMode && (
+                <input
+                  type="checkbox"
+                  checked={allVisibleSelected}
+                  ref={el => { if (el) el.indeterminate = someVisibleSelected && !allVisibleSelected; }}
+                  onChange={toggleSelectAll}
+                  style={{ width: 15, height: 15, cursor: 'pointer', accentColor: '#30D158' }}
+                  aria-label="Select all"
+                />
+              )}
               <h3 style={{ fontSize: 14, fontWeight: 600, color: '#fff' }}>All parcels</h3>
               <span style={{
                 fontSize: 11, fontWeight: 600, color: 'rgba(255,255,255,0.45)',
@@ -910,6 +973,50 @@ export default function Dashboard({ onViewReport, onCreateReport, onNavigateSett
               }}>
                 {loading ? '…' : `${visible.length} parcel${visible.length !== 1 ? 's' : ''}`}
               </span>
+            </div>
+            <div className="flex items-center gap-2 flex-shrink-0">
+              {selectionMode ? (
+                <>
+                  <button
+                    onClick={() => setShowBulkDeleteModal(true)}
+                    disabled={selectedIds.size === 0}
+                    style={{
+                      display: 'flex', alignItems: 'center', gap: 6,
+                      padding: '6px 12px', borderRadius: 8, fontSize: 12, fontWeight: 600,
+                      background: selectedIds.size > 0 ? 'rgba(255,69,58,0.18)' : 'rgba(255,255,255,0.04)',
+                      border: `1px solid ${selectedIds.size > 0 ? 'rgba(255,69,58,0.55)' : 'rgba(255,255,255,0.08)'}`,
+                      color: selectedIds.size > 0 ? '#FF453A' : 'rgba(255,255,255,0.25)',
+                      cursor: selectedIds.size > 0 ? 'pointer' : 'default',
+                    }}
+                  >
+                    <Trash2 style={{ width: 13, height: 13 }} />
+                    {selectedIds.size > 0 ? `Delete ${selectedIds.size} parcel${selectedIds.size !== 1 ? 's' : ''}` : 'Delete selected'}
+                  </button>
+                  <button
+                    onClick={exitSelectionMode}
+                    style={{
+                      display: 'flex', alignItems: 'center', gap: 5,
+                      padding: '6px 12px', borderRadius: 8, fontSize: 12, fontWeight: 600,
+                      background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.10)',
+                      color: 'rgba(255,255,255,0.55)', cursor: 'pointer',
+                    }}
+                  >
+                    <X style={{ width: 13, height: 13 }} />
+                    Cancel
+                  </button>
+                </>
+              ) : (
+                <button
+                  onClick={enterSelectionMode}
+                  style={{
+                    padding: '6px 12px', borderRadius: 8, fontSize: 12, fontWeight: 600,
+                    background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.10)',
+                    color: 'rgba(255,255,255,0.55)', cursor: 'pointer',
+                  }}
+                >
+                  Manage
+                </button>
+              )}
             </div>
             {/* Search */}
             <div style={{ position: 'relative', width: '100%', maxWidth: 280 }}>
@@ -985,15 +1092,25 @@ export default function Dashboard({ onViewReport, onCreateReport, onNavigateSett
               const cat = getCategory(zoneScore);
               const dotColor = CAT_COLOR[cat];
               const isExpanded = expandedId === parcel.id;
-              const isDeleting = deleteId === parcel.id;
-              const isEditing = editId === parcel.id;
+              const isSelected = selectedIds.has(parcel.id);
 
               return (
-                <div key={parcel.id} style={{ borderBottom: '1px solid rgba(255,255,255,0.05)' }}>
+                <div
+                  key={parcel.id}
+                  style={{
+                    borderBottom: '1px solid rgba(255,255,255,0.05)',
+                    borderLeft: `2px solid ${isSelected ? '#30D158' : 'transparent'}`,
+                    background: isSelected ? 'rgba(48,209,88,0.05)' : 'transparent',
+                    transition: 'background 0.15s',
+                  }}
+                >
                   {/* Main row */}
                   <div
                     style={{ display: 'flex', alignItems: 'center', gap: 14, padding: '14px 20px', cursor: 'pointer' }}
-                    onClick={() => setExpandedId(isExpanded ? null : parcel.id)}
+                    onClick={() => {
+                      if (selectionMode) { toggleSelect(parcel.id); return; }
+                      setExpandedId(isExpanded ? null : parcel.id);
+                    }}
                   >
                     {/* Dot */}
                     <div style={{ width: 8, height: 8, borderRadius: '50%', background: dotColor, flexShrink: 0, boxShadow: `0 0 6px ${dotColor}80` }} />
@@ -1021,66 +1138,27 @@ export default function Dashboard({ onViewReport, onCreateReport, onNavigateSett
 
                     {/* Action buttons */}
                     <div className="hidden sm:flex items-center gap-2 flex-shrink-0" onClick={e => e.stopPropagation()}>
-                      <button
-                        onClick={() => handleOpenMap(row)}
-                        style={{
-                          display: 'flex', alignItems: 'center', gap: 5,
-                          background: 'rgba(48,209,88,0.12)',
-                          border: '1px solid rgba(48,209,88,0.5)',
-                          borderRadius: 7, padding: '6px 12px',
-                          color: '#30D158', fontSize: 12, fontWeight: 600, cursor: 'pointer',
-                        }}
-                      >
-                        <MapIcon className="w-3.5 h-3.5" />
-                        Open map
-                      </button>
-                      {isEditing ? (
-                        <div className="flex items-center gap-1.5">
-                          {isDeleting ? (
-                            <>
-                              <button
-                                onClick={() => handleDelete(parcel.id)}
-                                style={{ padding: '6px 10px', borderRadius: 7, fontSize: 11, fontWeight: 700, background: 'rgba(255,69,58,0.20)', border: '1px solid rgba(255,69,58,0.60)', color: '#FF453A', cursor: 'pointer' }}
-                              >
-                                Confirm
-                              </button>
-                              <button
-                                onClick={() => { setDeleteId(null); }}
-                                style={{ padding: '6px 8px', borderRadius: 7, fontSize: 11, background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.10)', color: 'rgba(255,255,255,0.50)', cursor: 'pointer' }}
-                              >
-                                Cancel
-                              </button>
-                            </>
-                          ) : (
-                            <>
-                              <button
-                                onClick={() => setDeleteId(parcel.id)}
-                                style={{ display: 'flex', alignItems: 'center', gap: 5, padding: '6px 10px', borderRadius: 7, fontSize: 11, fontWeight: 600, background: 'rgba(255,69,58,0.12)', border: '1px solid rgba(255,69,58,0.40)', color: '#FF453A', cursor: 'pointer' }}
-                              >
-                                <Trash2 className="w-3.5 h-3.5" />
-                                Delete
-                              </button>
-                              <button
-                                onClick={() => setEditId(null)}
-                                style={{ padding: '6px 8px', borderRadius: 7, fontSize: 11, background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.10)', color: 'rgba(255,255,255,0.50)', cursor: 'pointer' }}
-                              >
-                                <X className="w-3.5 h-3.5" />
-                              </button>
-                            </>
-                          )}
-                        </div>
+                      {selectionMode ? (
+                        <input
+                          type="checkbox"
+                          checked={isSelected}
+                          onChange={() => toggleSelect(parcel.id)}
+                          style={{ width: 16, height: 16, cursor: 'pointer', accentColor: '#30D158' }}
+                          aria-label={`Select ${parcel.address ?? parcel.apn ?? 'parcel'}`}
+                        />
                       ) : (
                         <button
-                          onClick={() => setEditId(parcel.id)}
+                          onClick={() => handleOpenMap(row)}
                           style={{
-                            display: 'flex', alignItems: 'center', justifyContent: 'center',
-                            background: 'rgba(255,255,255,0.05)',
-                            border: '1px solid rgba(255,255,255,0.12)',
-                            borderRadius: 7, padding: '6px 9px',
-                            color: 'rgba(255,255,255,0.35)', cursor: 'pointer',
+                            display: 'flex', alignItems: 'center', gap: 5,
+                            background: 'rgba(48,209,88,0.12)',
+                            border: '1px solid rgba(48,209,88,0.5)',
+                            borderRadius: 7, padding: '6px 12px',
+                            color: '#30D158', fontSize: 12, fontWeight: 600, cursor: 'pointer',
                           }}
                         >
-                          <Pencil className="w-3.5 h-3.5" />
+                          <MapIcon className="w-3.5 h-3.5" />
+                          Open map
                         </button>
                       )}
                     </div>
@@ -1142,6 +1220,58 @@ export default function Dashboard({ onViewReport, onCreateReport, onNavigateSett
             onViewReport(reportId);
           }}
         />
+      )}
+
+      {/* Bulk delete confirmation modal */}
+      {showBulkDeleteModal && (
+        <div
+          style={{
+            position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.70)', backdropFilter: 'blur(6px)',
+            display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000, padding: 20,
+          }}
+          onClick={() => { if (!bulkDeleting) { setShowBulkDeleteModal(false); setBulkDeleteError(null); } }}
+        >
+          <div
+            style={{
+              background: 'rgb(13,17,26)', border: '1px solid rgba(255,255,255,0.10)', borderRadius: 16,
+              padding: 32, maxWidth: 400, width: '100%', textAlign: 'center',
+            }}
+            onClick={e => e.stopPropagation()}
+          >
+            <div style={{ width: 48, height: 48, borderRadius: 12, background: 'rgba(255,69,58,0.12)', border: '1px solid rgba(255,69,58,0.30)', display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 16px' }}>
+              <Trash2 style={{ width: 20, height: 20, color: '#FF453A' }} />
+            </div>
+            <h3 style={{ fontSize: 17, fontWeight: 700, color: '#fff', marginBottom: 8 }}>
+              Delete {selectedIds.size} parcel{selectedIds.size !== 1 ? 's' : ''}?
+            </h3>
+            <p style={{ fontSize: 13, color: 'rgba(255,255,255,0.45)', lineHeight: 1.6, marginBottom: 20 }}>
+              This will also delete all associated reports and soil data. This cannot be undone.
+            </p>
+            {bulkDeleteError && (
+              <div style={{ marginBottom: 16, padding: '10px 14px', borderRadius: 8, background: 'rgba(255,69,58,0.10)', border: '1px solid rgba(255,69,58,0.30)', display: 'flex', alignItems: 'flex-start', gap: 8, textAlign: 'left' }}>
+                <AlertCircle style={{ width: 14, height: 14, color: '#FF453A', marginTop: 1, flexShrink: 0 }} />
+                <p style={{ fontSize: 12, color: '#FF453A' }}>{bulkDeleteError}</p>
+              </div>
+            )}
+            <div style={{ display: 'flex', gap: 10 }}>
+              <button
+                onClick={() => { setShowBulkDeleteModal(false); setBulkDeleteError(null); }}
+                disabled={bulkDeleting}
+                style={{ flex: 1, padding: '10px 0', borderRadius: 10, background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(255,255,255,0.10)', color: 'rgba(255,255,255,0.55)', fontSize: 13, fontWeight: 600, cursor: 'pointer' }}
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleBulkDelete}
+                disabled={bulkDeleting}
+                style={{ flex: 1, padding: '10px 0', borderRadius: 10, background: 'rgba(255,69,58,0.85)', border: 'none', color: '#fff', fontSize: 13, fontWeight: 700, cursor: bulkDeleting ? 'default' : 'pointer', opacity: bulkDeleting ? 0.7 : 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6 }}
+              >
+                {bulkDeleting && <Loader2 style={{ width: 14, height: 14, animation: 'spin 1s linear infinite' }} />}
+                Delete
+              </button>
+            </div>
+          </div>
+        </div>
       )}
 
       {/* Usage limit modal */}
