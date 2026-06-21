@@ -1313,7 +1313,16 @@ async function buildSoilPolygons(
   const parcelScore = totalArea > 0 ? Math.round(weightedSum / totalArea) : 0;
   console.log('[buildSoilPolygons] clipped results:', polygons.length, '/ total:', wfsFeatures.length);
   console.log('[score] parcel overall:', parcelScore, 'from', polygons.length, 'polygons');
-  return polygons;
+
+  // Build per-mukey DEM slope map so the caller can pass it to the edge function.
+  const demSlopeByMukey: Record<string, number | null> = {};
+  for (const poly of polygons) {
+    const rawDem = poly.geojson.properties?.zoneSlopeDemPct;
+    demSlopeByMukey[poly.mukey] = rawDem != null && rawDem !== 'null' ? Number(rawDem) : null;
+  }
+  console.log('[score] demSlopeByMukey:', JSON.stringify(demSlopeByMukey));
+
+  return { polygons, demSlopeByMukey };
 }
 
 // Build exclusion zone overlay
@@ -1501,6 +1510,7 @@ interface MapPanelProps {
   onMapReady: (map: mapboxgl.Map) => void;
   onCoverageUpdate?: (coverage: EnvironmentalCoverage) => void;
   onSoilPolygonsReady?: (polygons: SoilPolygon[]) => void;
+  onDemSlopeReady?: (slopes: Record<string, number | null>) => void;
   onAllLayersReady?: () => void;
   onCanvasReady?: (canvas: HTMLCanvasElement) => void;
   onBestZoneInFlood?: (inFlood: boolean) => void;
@@ -1622,7 +1632,7 @@ function fitToBoundary(map: mapboxgl.Map, boundary: Record<string, unknown>) {
   } catch (_) { /* ignore */ }
 }
 
-function MapPanel({ reportId, cachedOverlayGeojson, parcelBoundary, isBboxFallback, boundarySource, soilResults, lat, lng, onMapReady, onCoverageUpdate, onSoilPolygonsReady, onAllLayersReady, onCanvasReady, onBestZoneInFlood, onPercFallback, onPercPinsReady, onTokenReady, onSoilHover, onSoilClick, activeTab }: MapPanelProps) {
+function MapPanel({ reportId, cachedOverlayGeojson, parcelBoundary, isBboxFallback, boundarySource, soilResults, lat, lng, onMapReady, onCoverageUpdate, onSoilPolygonsReady, onDemSlopeReady, onAllLayersReady, onCanvasReady, onBestZoneInFlood, onPercFallback, onPercPinsReady, onTokenReady, onSoilHover, onSoilClick, activeTab }: MapPanelProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<mapboxgl.Map | null>(null);
   const markerRef = useRef<mapboxgl.Marker | null>(null);
@@ -1692,6 +1702,8 @@ function MapPanel({ reportId, cachedOverlayGeojson, parcelBoundary, isBboxFallba
   onCoverageUpdateRef.current = onCoverageUpdate;
   const onSoilPolygonsReadyRef = useRef(onSoilPolygonsReady);
   onSoilPolygonsReadyRef.current = onSoilPolygonsReady;
+  const onDemSlopeReadyRef = useRef(onDemSlopeReady);
+  onDemSlopeReadyRef.current = onDemSlopeReady;
   const onBestZoneInFloodRef = useRef(onBestZoneInFlood);
   onBestZoneInFloodRef.current = onBestZoneInFlood;
   const onPercFallbackRef = useRef(onPercFallback);
@@ -1713,7 +1725,6 @@ function MapPanel({ reportId, cachedOverlayGeojson, parcelBoundary, isBboxFallba
   const soilResultsCountRef = useRef(0);
   // Holds the latest soilResults array so an in-flight scoring run can re-score with fresh data after it yields.
   const latestSoilResultsRef = useRef<SoilResult[]>([]);
-  const demSlopeByMukeyRef = useRef<Record<string, number | null>>({});
   const retrySoilLoadRef = useRef<(() => void) | null>(null);
   // Prevents zone selection from running more than once per parcel load
   const bestZoneRef = useRef<{ zones: BestZone[]; isFallbackZone: boolean } | null>(null);
@@ -2263,17 +2274,8 @@ function MapPanel({ reportId, cachedOverlayGeojson, parcelBoundary, isBboxFallba
       ? latestSoilResultsRef.current : results;
     console.log('[buildSoilPolygons] scoring with', scoringResults.length, 'tabular results (call had', results.length, ')');
     console.log('[clip] parcel geometry type passed in:', originalParcelFeature.geometry.type);
-    const soilPolygons = await buildSoilPolygons(soilFeatures, originalParcelFeature as unknown as Record<string, unknown>, scoringResults, floodFeatures, wetlandFeatures, femaScoring, nwiScoring, mapRef.current);
-
-    // Build per-mukey DEM slope map to pass to the edge function so both engines
-    // use the same resolved slope value.  Null entries mean SSURGO fallback was used.
-    const demSlopeByMukey: Record<string, number | null> = {};
-    for (const poly of soilPolygons) {
-      const rawDem = poly.geojson.properties?.zoneSlopeDemPct;
-      demSlopeByMukey[poly.mukey] = rawDem != null && rawDem !== 'null' ? Number(rawDem) : null;
-    }
-    console.log('[score] demSlopeByMukey:', JSON.stringify(demSlopeByMukey));
-    demSlopeByMukeyRef.current = demSlopeByMukey;
+    const { polygons: soilPolygons, demSlopeByMukey } = await buildSoilPolygons(soilFeatures, originalParcelFeature as unknown as Record<string, unknown>, scoringResults, floodFeatures, wetlandFeatures, femaScoring, nwiScoring, mapRef.current);
+    onDemSlopeReadyRef.current?.(demSlopeByMukey);
     if (soilPolygons.length > 0) onSoilPolygonsReadyRef.current?.(soilPolygons);
     const exclusion = buildExclusionZone(boundary, results);
     if (!soilPolygons?.length) {
@@ -3892,6 +3894,7 @@ export default function ReportDetail({ reportId, onBack, isPublic = false }: Rep
   const mapboxTokenRef = useRef<string>('');
   const mapSnapshotRef = useRef<string | null>(null);
   const percPinsRef = useRef<PercPinData[]>([]);
+  const demSlopeByMukeyRef = useRef<Record<string, number | null>>({});
   const pipelineRanRef = useRef<string | null>(null);
   const boundaryFetchedRef = useRef(false);
   const isFetchingBoundaryRef = useRef(false);
@@ -5332,6 +5335,7 @@ export default function ReportDetail({ reportId, onBack, isPublic = false }: Rep
             }}
             onCoverageUpdate={handleCoverageUpdate}
             onSoilPolygonsReady={setMapSoilPolygons}
+            onDemSlopeReady={(slopes) => { demSlopeByMukeyRef.current = slopes; }}
             onAllLayersReady={() => {
               console.log('[map] all layers ready — overlay dismissed');
               setMapLayersReady(true);
