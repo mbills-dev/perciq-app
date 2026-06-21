@@ -2803,7 +2803,15 @@ function MapPanel({ reportId, cachedOverlayGeojson, parcelBoundary, isBboxFallba
         if (demAvailable) console.log('[perc] DEM ready — using real elevation slope');
         else console.log('[perc] DEM timed out after 5000ms — using SSURGO fallback');
 
-        const MIN_EXCLUSION_EDGE_DIST_M = 20;
+        // Scale edge-distance thresholds to parcel size — a 32×32m parcel can't
+        // yield any point >16m from its edge, so fixed 30/50m thresholds eliminate everything.
+        const parcelAreaSqM = (() => { try { return turf.area(toParcelFeature(boundary)); } catch { return fullZoneArea; } })();
+        const parcelRadiusM = Math.sqrt(parcelAreaSqM / Math.PI);
+        // Exclusion setback from flood/wetland boundary: 20m on large parcels, 5m on small (<500 sqm)
+        const MIN_EXCLUSION_EDGE_DIST_M = parcelAreaSqM < 500 ? 5 : 20;
+        // Edge-distance bonus thresholds: scale down proportionally so small parcels aren't penalized
+        const EDGE_BONUS_HI_M = Math.max(parcelRadiusM * 0.6, 10);  // >this → +20
+        const EDGE_BONUS_LO_M = Math.max(parcelRadiusM * 0.3, 5);   // >this → +5, else -999
         let exclusionEdgeDiscardCount = 0;
 
         const distToExclusionEdge = (pt: turf.Feature<turf.Point>, geom: turf.Feature<turf.Polygon | turf.MultiPolygon>): number => {
@@ -2841,7 +2849,7 @@ function MapPanel({ reportId, cachedOverlayGeojson, parcelBoundary, isBboxFallba
           if (parcelLine) {
             try { distToEdge = turf.nearestPointOnLine(parcelLine, pt as turf.Feature<turf.Point>, { units: 'meters' }).properties.dist ?? 999; } catch { /* keep 999 */ }
           }
-          const edgeBonus = distToEdge > 50 ? 20 : distToEdge > 30 ? 5 : -999;
+          const edgeBonus = distToEdge > EDGE_BONUS_HI_M ? 20 : distToEdge > EDGE_BONUS_LO_M ? 5 : 0;
 
           // Slope: prefer DEM-derived actual slope; fall back to SSURGO slope_h
           const parentPoly = soilPolygons.find(p => { try { return turf.booleanPointInPolygon(pt, p.geojson); } catch { return false; } });
@@ -2944,7 +2952,7 @@ function MapPanel({ reportId, cachedOverlayGeojson, parcelBoundary, isBboxFallba
               if (parcelLine) {
                 try { distToEdge = turf.nearestPointOnLine(parcelLine, pt as turf.Feature<turf.Point>, { units: 'meters' }).properties.dist ?? 999; } catch { /* keep 999 */ }
               }
-              const edgeBonus = distToEdge > 50 ? 20 : distToEdge > 30 ? 5 : -999;
+              const edgeBonus = distToEdge > EDGE_BONUS_HI_M ? 20 : distToEdge > EDGE_BONUS_LO_M ? 5 : 0;
               const ssurgoSlope = parseFloat(sp.geojson.properties?.slope_h as string) || null;
               const actualSlope = demAvailable && mapRef.current ? getActualSlope(mapRef.current, pLng, pLat) : null;
 
@@ -2991,10 +2999,26 @@ function MapPanel({ reportId, cachedOverlayGeojson, parcelBoundary, isBboxFallba
           'edge dist:', selected.map(s => s.distToEdge + 'm').join(', '),
           fromExpandedSearch ? '(expanded search)' : '');
 
-        // True fallback: all viable/possible zones exhausted
+        // True fallback: all viable/possible zones exhausted — place on polygon centroid
+        // with accurate flood/wetland/slope values (never hardcode inFlood: true)
         if (selected.length === 0) {
           const fallbackPin = turf.pointOnFeature(zonePoly);
-          selected.push({ pt: fallbackPin as turf.Feature<turf.Point>, ptScore: 0, inFlood: true, inWetland: false, slope: null, distToEdge: 0, actualSlope: null, demSlopeScore: 0, isFallback: true });
+          const fbPt = fallbackPin as turf.Feature<turf.Point>;
+          const [fbLng, fbLat] = fbPt.geometry.coordinates;
+          const fbInFlood = floodUnion
+            ? (() => { try { return turf.booleanPointInPolygon(fbPt, floodUnion); } catch { return false; } })()
+            : floodFeatures.some(f => { try { return turf.booleanPointInPolygon(fbPt, f); } catch { return false; } });
+          const fbInWetland = wetlandUnion
+            ? (() => { try { return turf.booleanPointInPolygon(fbPt, wetlandUnion); } catch { return false; } })()
+            : wetlandFeatures.some(w => { try { return turf.booleanPointInPolygon(fbPt, w); } catch { return false; } });
+          const fbActualSlope = demAvailable && mapRef.current ? getActualSlope(mapRef.current, fbLng, fbLat) : null;
+          const fbParentPoly = soilPolygons.find(p => { try { return turf.booleanPointInPolygon(fbPt, p.geojson); } catch { return false; } });
+          const fbSsurgoSlope = fbParentPoly ? (parseFloat(fbParentPoly.geojson.properties?.slope_h as string) || null) : null;
+          const fbDemSlopeScore = fbActualSlope === null ? 0 : fbActualSlope <= 5 ? 100 : fbActualSlope <= 8 ? 85 : fbActualSlope <= 12 ? 65 : 45;
+          let fbDistToEdge = 0;
+          if (parcelLine) { try { fbDistToEdge = Math.round(turf.nearestPointOnLine(parcelLine, fbPt, { units: 'meters' }).properties.dist ?? 0); } catch { /* keep 0 */ } }
+          const fbPtScore = (fbInFlood ? 0 : 40) + (fbInWetland ? 0 : 40);
+          selected.push({ pt: fbPt, ptScore: fbPtScore, inFlood: fbInFlood, inWetland: fbInWetland, slope: fbSsurgoSlope, distToEdge: fbDistToEdge, actualSlope: fbActualSlope, demSlopeScore: fbDemSlopeScore, isFallback: true });
           console.log('[perc] fallback pin used — all viable/possible zones exhausted');
           onPercFallbackRef.current?.(true);
         } else if (fromExpandedSearch) {
