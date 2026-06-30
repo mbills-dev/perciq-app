@@ -4647,41 +4647,23 @@ export default function ReportDetail({ reportId, onBack, isPublic = false }: Rep
     });
   }, [reportId]);
 
-  if (loading) {
-    return (
-      <div className="flex items-center justify-center h-full py-32">
-        <div className="w-6 h-6 border-2 border-white/20 border-t-primary-400 rounded-full animate-spin" />
-      </div>
-    );
-  }
-
-  if (!report) {
-    return (
-      <div className="text-center py-20">
-        <p className="text-white/40">Report not found.</p>
-        <button onClick={onBack} className="btn-ghost mt-4 text-sm">Go Back</button>
-      </div>
-    );
-  }
-
-  const parcel = report.parcels;
-  const pipelineDone = pipeline.step1 === 'done'
-    && (pipeline.step2 === 'done' || pipeline.step2 === 'skipped')
-    && (pipeline.step3 === 'done' || pipeline.step3 === 'error');
-  const pipelineError = pipeline.step1 === 'error';
-  const tier = (scoreResult?.data_depth_tier ?? report?.data_depth_tier ?? 1) as 1 | 2 | 3 | 4;
-  const dataNote = (() => {
-    const base = scoreResult?.data_depth_note ?? report?.data_depth_note ?? 'Score and zone estimates based on USDA soil survey data.';
-    const county = parcel?.county ?? null;
-    const nearby = scoreResult?.nearby_tests_summary?.matching_within_5mi ?? 0;
-    if (nearby === 0 && county) return `${base} No local perc test history available for ${county} County yet.`;
-    return base;
-  })();
-  const parcelOwner = (parcel as (typeof parcel & { owner?: string | null }))?.owner;
-  const convScore = report.conventional_score ?? scoreResult?.conventional_score ?? null;
-  const altScore = report.alternative_score ?? scoreResult?.alternative_score ?? null;
-
-  const nearbyCount = scoreResult?.nearby_tests_summary?.matching_within_5mi ?? 0;
+  // ── Site Alerts helper — hoisted above early returns so the siteAlerts useMemo
+  // can reference it without hitting the temporal dead zone. Uses only its argument
+  // and module-level constants (BAND, GATE_BAND), no component state.
+  const getSiteAlerts = (data: SoilHoverData | null): { criticals: string[]; warnings: string[] } => {
+    if (!data) return { criticals: [], warnings: [] };
+    const criticals: string[] = [];
+    const warnings: string[] = [];
+    for (const gate of data.firedGates) {
+      const key = gate.split('→')[0];
+      const band = BAND[GATE_BAND[key]];
+      if (!band?.alertText || !band?.alertLevel) continue;
+      if (band.alertLevel === 'critical') criticals.push(band.alertText);
+      else warnings.push(band.alertText);
+    }
+    console.log('[alerts] mukey', data.mukey, 'gates_fired:', data.firedGates.join(' ') || 'none', 'alerts_emitted:', [...criticals, ...warnings].join(' | ') || 'none');
+    return { criticals, warnings };
+  };
 
   // ── HUD derived state ─────────────────────────────────────────────────────
   // Memoized so getSiteAlerts (and the [alerts] log) only re-execute when the
@@ -4729,6 +4711,46 @@ export default function ReportDetail({ reportId, onBack, isPublic = false }: Rep
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [hudHover, hudLocked, mapSoilPolygons, activeTab]);
 
+  // Memoized: getSiteAlerts (and its [alerts] log) only re-runs when hudData identity changes.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const siteAlerts = useMemo(() => getSiteAlerts(hudData), [hudData]);
+
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center h-full py-32">
+        <div className="w-6 h-6 border-2 border-white/20 border-t-primary-400 rounded-full animate-spin" />
+      </div>
+    );
+  }
+
+  if (!report) {
+    return (
+      <div className="text-center py-20">
+        <p className="text-white/40">Report not found.</p>
+        <button onClick={onBack} className="btn-ghost mt-4 text-sm">Go Back</button>
+      </div>
+    );
+  }
+
+  const parcel = report.parcels;
+  const pipelineDone = pipeline.step1 === 'done'
+    && (pipeline.step2 === 'done' || pipeline.step2 === 'skipped')
+    && (pipeline.step3 === 'done' || pipeline.step3 === 'error');
+  const pipelineError = pipeline.step1 === 'error';
+  const tier = (scoreResult?.data_depth_tier ?? report?.data_depth_tier ?? 1) as 1 | 2 | 3 | 4;
+  const dataNote = (() => {
+    const base = scoreResult?.data_depth_note ?? report?.data_depth_note ?? 'Score and zone estimates based on USDA soil survey data.';
+    const county = parcel?.county ?? null;
+    const nearby = scoreResult?.nearby_tests_summary?.matching_within_5mi ?? 0;
+    if (nearby === 0 && county) return `${base} No local perc test history available for ${county} County yet.`;
+    return base;
+  })();
+  const parcelOwner = (parcel as (typeof parcel & { owner?: string | null }))?.owner;
+  const convScore = report.conventional_score ?? scoreResult?.conventional_score ?? null;
+  const altScore = report.alternative_score ?? scoreResult?.alternative_score ?? null;
+
+  const nearbyCount = scoreResult?.nearby_tests_summary?.matching_within_5mi ?? 0;
+
   // Parcel-level stats for bottom strip
   const floodPct = envCoverage?.floodPct ?? 0;
   const nwiPct = envCoverage?.nwiPct ?? 0;
@@ -4736,25 +4758,6 @@ export default function ReportDetail({ reportId, onBack, isPublic = false }: Rep
     const total = mapSoilPolygons.filter(p => p.bucket === 'viable').reduce((s, p) => { try { return s + turf.area(p.geojson); } catch { return s; } }, 0);
     return (total / 4047).toFixed(1);
   })();
-
-  // ── Site Alerts — derived entirely from the gate evaluation output ────────
-  // firedGates is the single source of truth: the same keys that set the ceiling
-  // set the alert. Alert text comes from BAND via GATE_BAND so it is guaranteed
-  // to match the factor bar copy for that band.
-  const getSiteAlerts = (data: SoilHoverData | null): { criticals: string[]; warnings: string[] } => {
-    if (!data) return { criticals: [], warnings: [] };
-    const criticals: string[] = [];
-    const warnings: string[] = [];
-    for (const gate of data.firedGates) {
-      const key = gate.split('→')[0];
-      const band = BAND[GATE_BAND[key]];
-      if (!band?.alertText || !band?.alertLevel) continue;
-      if (band.alertLevel === 'critical') criticals.push(band.alertText);
-      else warnings.push(band.alertText);
-    }
-    console.log('[alerts] mukey', data.mukey, 'gates_fired:', data.firedGates.join(' ') || 'none', 'alerts_emitted:', [...criticals, ...warnings].join(' | ') || 'none');
-    return { criticals, warnings };
-  };
 
   // HUD verdict logic
   const getVerdict = (data: SoilHoverData | null): { title: string; body: string; color: string; bg: string; border: string } => {
@@ -4839,9 +4842,6 @@ export default function ReportDetail({ reportId, onBack, isPublic = false }: Rep
 
   const verdict = getVerdict(hudData);
   const flags = getFlags(hudData);
-  // Memoized: getSiteAlerts (and its [alerts] log) only re-runs when hudData identity changes.
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  const siteAlerts = useMemo(() => getSiteAlerts(hudData), [hudData]);
   const isHovering = !!hudHover;
   const isLocked = !!hudLocked && !hudHover;
   const activeSource = hudData ?? { drainScore: 0, ksatScore: 0, slopeScore: 0, wtScore: 0, pondingScore: null as number | null, restrictiveLayerScore: null as number | null, floodingScore: null as number | null, floodOverlapPct: 0, wetlandOverlapPct: 0, soilName: '—', finalScore: 0, bucket: 'no-data' as const, mukey: '', rawWatertableInches: null as number | null, rawResdeptCm: null as number | null, rawFlodfreqcl: null as string | null, rawSlopePct: null as number | null, zoneSlopeDemPct: null as number | null, clay40DepthCm: null as number | null, rawKsat: null as number | null };
