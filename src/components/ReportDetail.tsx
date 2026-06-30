@@ -2694,6 +2694,7 @@ function MapPanel({ reportId, cachedOverlayGeojson, parcelBoundary, isBboxFallba
       badgeDiv.addEventListener('mouseleave', () => { tip.style.display = 'none'; });
 
       if (!visible || !zoneLabelsVisibleRef.current) el.style.display = 'none';
+      el.style.zIndex = '1'; // perc pin DOM markers use z-index 10 and must stack above these
       const marker = new mapboxgl.Marker({ element: el, anchor: 'center' }).setLngLat(badgeLngLat).addTo(map);
       zoneMarkersRef.current.push(marker);
       zoneBadgeMarkersRef.current.push(marker);
@@ -2979,7 +2980,10 @@ function MapPanel({ reportId, cachedOverlayGeojson, parcelBoundary, isBboxFallba
             if (parcelLine) { try { plDistToEdge = Math.round(turf.nearestPointOnLine(parcelLine, polylabelPt, { units: 'meters' }).properties.dist ?? 0); } catch { /* keep 0 */ } }
             let plClearance = 0;
             if (buildableLine) { try { plClearance = Math.round(turf.nearestPointOnLine(buildableLine, polylabelPt, { units: 'meters' }).properties.dist ?? 0); } catch { /* keep 0 */ } }
-            selected = [...selected, { pt: polylabelPt, ptScore: 60, inFlood: false, inWetland: false, slope: null, distToEdge: plDistToEdge, actualSlope: plActualSlope, demSlopeScore: 0, clearance: plClearance }];
+            const plDemSlopeScore = plActualSlope === null ? 0 : plActualSlope <= 5 ? 100 : plActualSlope <= 8 ? 85 : plActualSlope <= 12 ? 65 : 45;
+            const plSlopePenalty = plActualSlope === null ? 0 : plActualSlope <= 5 ? 0 : plActualSlope <= 8 ? -15 : plActualSlope <= 12 ? -35 : -55;
+            const plPtScore = 40 + 40 + (plDistToEdge > EDGE_BONUS_HI_M ? 20 : plDistToEdge > EDGE_BONUS_LO_M ? 5 : 0) + plSlopePenalty;
+            selected = [...selected, { pt: polylabelPt, ptScore: plPtScore, inFlood: false, inWetland: false, slope: null, distToEdge: plDistToEdge, actualSlope: plActualSlope, demSlopeScore: plDemSlopeScore, clearance: plClearance }];
           }
 
           // Step 4: hard clearance floor — polylabel always survives, others must clear it
@@ -3232,93 +3236,56 @@ function MapPanel({ reportId, cachedOverlayGeojson, parcelBoundary, isBboxFallba
         }));
         onPercPinsReadyRef.current?.(pins);
 
-        // GeoJSON source + symbol layer — coordinates live in geometry, never drift on zoom.
-        // Icons are rasterized synchronously via canvas so they are guaranteed registered
-        // before the symbol layer is added (async img.onload causes a race and gray fallbacks).
-        const registerPercIcons = () => {
-          // White circle pins: all same size, fallback grey
-          const icons: Array<{ id: string; size: number; num: number; fill: string; border: string }> = [
-            { id: 'perc-circle-1',       size: 26, num: 1, fill: '#FFFFFF', border: '#1a1a2e' },
-            { id: 'perc-circle-2',       size: 26, num: 2, fill: '#FFFFFF', border: '#1a1a2e' },
-            { id: 'perc-circle-3',       size: 26, num: 3, fill: '#FFFFFF', border: '#1a1a2e' },
-            { id: 'perc-circle-fallback', size: 26, num: 1, fill: '#9ca3af', border: '#374151' },
-          ];
-          for (const { id, size, num, fill, border } of icons) {
-            if (map.hasImage(id)) continue;
-            try {
-              // Add padding so the shadow stays within the canvas bounds
-              const PAD = 4;
-              const canvasSize = size + PAD * 2;
-              const canvas = document.createElement('canvas');
-              canvas.width = canvasSize; canvas.height = canvasSize;
-              const ctx = canvas.getContext('2d')!;
-              const cx = canvasSize / 2;
-              const cy = canvasSize / 2;
-              const radius = size / 2 - 2;
-              // Drop shadow contained within padded canvas
-              ctx.shadowColor = 'rgba(0,0,0,0.5)';
-              ctx.shadowBlur = 4;
-              ctx.shadowOffsetX = 0;
-              ctx.shadowOffsetY = 2;
-              // Circle fill
-              ctx.beginPath(); ctx.arc(cx, cy, radius, 0, Math.PI * 2); ctx.fillStyle = fill; ctx.fill();
-              // Clear shadow before border and text
-              ctx.shadowColor = 'transparent';
-              ctx.shadowBlur = 0;
-              ctx.shadowOffsetY = 0;
-              // Border ring
-              ctx.beginPath(); ctx.arc(cx, cy, radius, 0, Math.PI * 2);
-              ctx.strokeStyle = border; ctx.lineWidth = 2.5; ctx.stroke();
-              // Rank number
-              ctx.fillStyle = border;
-              ctx.font = `bold ${Math.round(size * 0.42)}px Arial,sans-serif`;
-              ctx.textAlign = 'center';
-              ctx.textBaseline = 'middle';
-              ctx.fillText(String(num), cx, cy + 0.5);
-              const imageData = ctx.getImageData(0, 0, canvasSize, canvasSize);
-              map.addImage(id, imageData);
-            } catch (imgErr) { console.warn('[perc] icon registration failed:', id, imgErr); }
-          }
+        // Perc pins as DOM Markers — stacks above the zone-badge DOM markers (z-index 10 vs 1).
+        // Remove any legacy symbol layer left from a previous session.
+        try { if (map.getLayer('perc-pins-layer')) map.removeLayer('perc-pins-layer'); } catch { /* ignore */ }
+        try { if (map.getSource('perc-pins')) map.removeSource('perc-pins'); } catch { /* ignore */ }
+
+        percMarkersRef.current.forEach(m => m.remove());
+        percMarkersRef.current = [];
+
+        const drawPinCanvas = (num: number, fill: string, border: string): HTMLCanvasElement => {
+          const size = 26, PAD = 4, canvasSize = size + PAD * 2;
+          const canvas = document.createElement('canvas');
+          canvas.width = canvasSize; canvas.height = canvasSize;
+          const ctx = canvas.getContext('2d')!;
+          const cx = canvasSize / 2, cy = canvasSize / 2, radius = size / 2 - 2;
+          ctx.shadowColor = 'rgba(0,0,0,0.5)'; ctx.shadowBlur = 4; ctx.shadowOffsetX = 0; ctx.shadowOffsetY = 2;
+          ctx.beginPath(); ctx.arc(cx, cy, radius, 0, Math.PI * 2); ctx.fillStyle = fill; ctx.fill();
+          ctx.shadowColor = 'transparent'; ctx.shadowBlur = 0; ctx.shadowOffsetY = 0;
+          ctx.beginPath(); ctx.arc(cx, cy, radius, 0, Math.PI * 2); ctx.strokeStyle = border; ctx.lineWidth = 2.5; ctx.stroke();
+          ctx.fillStyle = border; ctx.font = `bold ${Math.round(size * 0.42)}px Arial,sans-serif`;
+          ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillText(String(num), cx, cy + 0.5);
+          return canvas;
         };
-        registerPercIcons();
 
         try {
-          if (map.getSource('perc-pins')) {
-            (map.getSource('perc-pins') as mapboxgl.GeoJSONSource).setData({ type: 'FeatureCollection', features: percFeatures });
-          } else {
-            map.addSource('perc-pins', { type: 'geojson', data: { type: 'FeatureCollection', features: percFeatures } });
-          }
-          if (!map.getLayer('perc-pins-layer')) {
-            map.addLayer({
-              id: 'perc-pins-layer',
-              type: 'symbol',
-              source: 'perc-pins',
-              layout: {
-                'icon-image': ['match', ['get', 'iconId'], 'perc-circle-1', 'perc-circle-1', 'perc-circle-2', 'perc-circle-2', 'perc-circle-3', 'perc-circle-3', 'perc-circle-fallback', 'perc-circle-fallback', 'perc-circle-1'],
-                'icon-size': 1,
-                'icon-anchor': 'center',
-                'icon-allow-overlap': true,
-                'icon-ignore-placement': true,
-                visibility: percVisible ? 'visible' : 'none',
-              },
-              paint: {},
-            });
-            overlayIds.push('perc-pins-layer', 'perc-pins');
+          percFeatures.forEach(feature => {
+            const props = feature.properties as { rank: number; iconId: string; tooltipHtml: string };
+            const [lng, lat] = (feature.geometry as turf.Point).coordinates as [number, number];
+            const isFallbackPin = props.iconId === 'perc-circle-fallback';
+            const fill = isFallbackPin ? '#9ca3af' : '#FFFFFF';
+            const border = isFallbackPin ? '#374151' : '#1a1a2e';
+            const pinCanvas = drawPinCanvas(props.rank, fill, border);
 
-            map.on('click', 'perc-pins-layer', (e) => {
-              const feature = e.features?.[0];
-              if (!feature) return;
-              const html = (feature.properties as Record<string, unknown>)?.tooltipHtml as string ?? '';
-              const coords = (feature.geometry as turf.Point).coordinates as [number, number];
+            const wrapper = document.createElement('div');
+            wrapper.style.cssText = 'cursor:pointer;z-index:10;position:relative;';
+            wrapper.style.display = percVisible ? 'block' : 'none';
+            wrapper.appendChild(pinCanvas);
+
+            wrapper.addEventListener('click', () => {
               safeRemovePopup(soilPopupRef.current);
               soilPopupRef.current = new mapboxgl.Popup({ closeButton: true, closeOnClick: true, offset: [0, -20], maxWidth: '280px', className: 'soil-tooltip' })
-                .setLngLat(coords).setHTML(html).addTo(map) as mapboxgl.Popup;
+                .setLngLat([lng, lat]).setHTML(props.tooltipHtml).addTo(map) as mapboxgl.Popup;
               setTimeout(() => { const btn = document.querySelector('.mapboxgl-popup-close-button'); if (btn) btn.removeAttribute('aria-hidden'); }, 0);
             });
-            map.on('mouseenter', 'perc-pins-layer', () => { map.getCanvas().style.cursor = 'pointer'; });
-            map.on('mouseleave', 'perc-pins-layer', () => { map.getCanvas().style.cursor = ''; });
-          }
-        } catch (layerErr) { console.warn('[perc] layer error:', (layerErr as Error).message); }
+            wrapper.addEventListener('mouseenter', () => { map.getCanvas().style.cursor = 'pointer'; });
+            wrapper.addEventListener('mouseleave', () => { map.getCanvas().style.cursor = ''; });
+
+            const marker = new mapboxgl.Marker({ element: wrapper, anchor: 'center' }).setLngLat([lng, lat]).addTo(map);
+            percMarkersRef.current.push(marker);
+          });
+        } catch (markerErr) { console.warn('[perc] marker error:', (markerErr as Error).message); }
 
         console.log(`[perc] ${selected.length} perc site pin(s) placed from ${insidePoints.length} candidate points`);
 
@@ -3516,10 +3483,8 @@ function MapPanel({ reportId, cachedOverlayGeojson, parcelBoundary, isBboxFallba
   }, [wetlandVisible]);
 
   useEffect(() => {
-    const map = mapRef.current;
-    if (!map) return;
-    const vis = percVisible ? 'visible' : 'none';
-    try { if (map.getLayer('perc-pins-layer')) map.setLayoutProperty('perc-pins-layer', 'visibility', vis); } catch { /* ignore */ }
+    const display = percVisible ? 'block' : 'none';
+    percMarkersRef.current.forEach(m => { const el = m.getElement(); if (el) el.style.display = display; });
   }, [percVisible]);
 
   const allReady = soilReady && femaReady && nwiReady;
