@@ -3434,8 +3434,8 @@ function MapPanel({ reportId, cachedOverlayGeojson, parcelBoundary, isBboxFallba
       addOrUpdateBoundary(map, parcelBoundary, isBboxFallback);
       if (!isBboxFallback) { fitToBoundary(map, parcelBoundary); markerRef.current?.remove(); markerRef.current = null; }
       else map.easeTo({ zoom: zoomFromBbox(parcelBoundary), duration: 800 });
-      if (soilResults.length > 0) {
-        const key = `${JSON.stringify(parcelBoundary).slice(0, 80)}-${soilResults.length}`;
+      if (stableSoilResults.length > 0) {
+        const key = `${JSON.stringify(parcelBoundary).slice(0, 80)}-${stableSoilResults.length}`;
         if (lastOverlayKeyRef.current !== key) {
           lastOverlayKeyRef.current = key;
           soilRenderedRef.current = false;
@@ -3443,21 +3443,21 @@ function MapPanel({ reportId, cachedOverlayGeojson, parcelBoundary, isBboxFallba
           nwiRenderedRef.current = false;
           bestZoneRef.current = null;
           soilResultsCountRef.current = 0;
-          latestSoilResultsRef.current = soilResults;
+          latestSoilResultsRef.current = stableSoilResults;
         }
         // Always register a retry handler pointing at the current boundary/results
         retrySoilLoadRef.current = () => {
           soilRenderedRef.current = false;
           lastOverlayKeyRef.current = '';
           setSdaError(false);
-          applyFullOverlay(map, parcelBoundary, soilResults, soilVisible);
+          applyFullOverlay(map, parcelBoundary, stableSoilResults, soilVisible);
         };
-        await applyFullOverlay(map, parcelBoundary, soilResults, soilVisible);
+        await applyFullOverlay(map, parcelBoundary, stableSoilResults, soilVisible);
       }
     };
     map.isStyleLoaded() ? apply() : map.once('load', apply);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [parcelBoundary, isBboxFallback, soilResults]);
+  }, [parcelBoundary, isBboxFallback, stableSoilResults]);
 
   // Toggle soil overlay + zone badge visibility
   useEffect(() => {
@@ -4760,7 +4760,7 @@ export default function ReportDetail({ reportId, onBack, isPublic = false }: Rep
   })();
 
   // HUD verdict logic
-  const getVerdict = (data: SoilHoverData | null): { title: string; body: string; color: string; bg: string; border: string } => {
+  const getVerdict = (data: SoilHoverData | null, precomputedAlerts?: { criticals: string[]; warnings: string[] }): { title: string; body: string; color: string; bg: string; border: string } => {
     if (!data) {
       const acreage = parcel?.acreage?.toFixed(0) ?? '?';
       const floodZone = envCoverage?.floodZone ?? 'AE';
@@ -4773,7 +4773,7 @@ export default function ReportDetail({ reportId, onBack, isPublic = false }: Rep
       };
     }
     if (data.bucket === 'viable') {
-      const alerts = getSiteAlerts(data);
+      const alerts = precomputedAlerts ?? getSiteAlerts(data);
       const hasCriticals = alerts.criticals.length > 0;
       const warnCount = alerts.warnings.length;
       const title = hasCriticals
@@ -4788,7 +4788,7 @@ export default function ReportDetail({ reportId, onBack, isPublic = false }: Rep
       };
     }
     if (data.bucket === 'engineering-needed') {
-      const alerts = getSiteAlerts(data);
+      const alerts = precomputedAlerts ?? getSiteAlerts(data);
       const hasCriticals = alerts.criticals.length > 0;
       return {
         title: hasCriticals
@@ -4840,7 +4840,7 @@ export default function ReportDetail({ reportId, onBack, isPublic = false }: Rep
     ];
   };
 
-  const verdict = getVerdict(hudData);
+  const verdict = getVerdict(hudData, siteAlerts);
   const flags = getFlags(hudData);
   const isHovering = !!hudHover;
   const isLocked = !!hudLocked && !hudHover;
