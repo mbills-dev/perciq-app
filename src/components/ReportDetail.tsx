@@ -2789,13 +2789,75 @@ function MapPanel({ reportId, cachedOverlayGeojson, parcelBoundary, isBboxFallba
         }
         console.log('[perc] candidate points in flood-free zone:', insidePoints.length);
 
+        // ─── Perc-pin placement constants ────────────────────────────────────────
+        const SETBACK_M = 3;
+        const CLEARANCE_FLOOR_FRAC = 0.6;
+        const W_CLEAR = 0.5;
+        const W_FLAT = 0.5;
+
+        // ─── STEP 1: buildable = (zone ∩ parcel) buffered inward by SETBACK_M ───
+        let buildable: turf.Feature<turf.Polygon> | null = null;
+        let buildableLine: turf.Feature<turf.LineString | turf.MultiLineString> | null = null;
+        let polylabelPt: turf.Feature<turf.Point> | null = null;
+        let percPinMethod = 'legacy';
+        try {
+          const parcelPoly = toParcelFeature(boundary);
+          // Intersect zone with parcel — fall back to samplingZone if it throws
+          let base: turf.Feature<turf.Polygon | turf.MultiPolygon>;
+          try {
+            const inter = turf.intersect(turf.featureCollection([
+              zonePoly as turf.Feature<turf.Polygon | turf.MultiPolygon>,
+              parcelPoly as turf.Feature<turf.Polygon>,
+            ]));
+            base = (inter && (inter.geometry.type === 'Polygon' || inter.geometry.type === 'MultiPolygon'))
+              ? inter as turf.Feature<turf.Polygon | turf.MultiPolygon>
+              : samplingZone as turf.Feature<turf.Polygon | turf.MultiPolygon>;
+          } catch {
+            base = samplingZone as turf.Feature<turf.Polygon | turf.MultiPolygon>;
+          }
+          // Inward buffer — negative distance shrinks polygon
+          const shrunk = turf.buffer(base, -SETBACK_M, { units: 'meters' });
+          if (!shrunk || !shrunk.geometry) throw new Error('inward buffer returned empty geometry');
+          // Keep largest ring if MultiPolygon
+          let best: turf.Feature<turf.Polygon>;
+          if (shrunk.geometry.type === 'MultiPolygon') {
+            const parts = (shrunk.geometry.coordinates as number[][][][]).map(c => turf.polygon(c));
+            parts.sort((a, b) => turf.area(b) - turf.area(a));
+            if (parts.length === 0) throw new Error('no polygon parts after inward buffer');
+            best = parts[0];
+          } else {
+            best = shrunk as turf.Feature<turf.Polygon>;
+          }
+          buildable = best;
+          buildableLine = turf.polygonToLine(buildable) as turf.Feature<turf.LineString | turf.MultiLineString>;
+          // polylabel — deepest interior point, guaranteed to survive clearance floor
+          const rings = buildable.geometry.coordinates as number[][][];
+          const plResult = polylabel(rings, 0.0001);
+          polylabelPt = turf.point([plResult[0], plResult[1]]);
+          console.log('[perc-pin] buildable area:', Math.round(turf.area(buildable)), 'sqm setback_m:', SETBACK_M);
+        } catch (e) {
+          console.warn('[perc-pin] buildable construction failed:', (e as Error).message, '— primary zone pins will be suppressed');
+          buildable = null; buildableLine = null; polylabelPt = null;
+        }
+
+        // ─── STEP 2: Filter grid to buildable interior; inject polylabel ─────────
+        let candidatePoints: turf.Feature<turf.Point>[] = insidePoints;
+        if (buildable) {
+          const filtered = insidePoints.filter(pt => {
+            try { return turf.booleanPointInPolygon(pt, buildable!); } catch { return false; }
+          });
+          // polylabel always enters candidate set when buildable exists
+          candidatePoints = polylabelPt ? [...filtered, polylabelPt] : filtered;
+          console.log('[perc-pin] inside buildable:', filtered.length, '+ polylabel =', candidatePoints.length, 'candidates setback_m:', SETBACK_M);
+        }
+
         if (bestZoneEntirelyInFlood) onBestZoneInFloodRef.current?.(true);
 
         // Build a line from parcel boundary for edge-distance scoring
         let parcelLine: turf.Feature<turf.LineString | turf.MultiLineString> | null = null;
         try { parcelLine = turf.polygonToLine(toParcelFeature(boundary)) as turf.Feature<turf.LineString | turf.MultiLineString>; } catch { /* skip */ }
 
-        type ScoredPoint = { pt: turf.Feature<turf.Point>; ptScore: number; inFlood: boolean; inWetland: boolean; slope: number | null; distToEdge: number; actualSlope: number | null; demSlopeScore: number; isFallback?: boolean };
+        type ScoredPoint = { pt: turf.Feature<turf.Point>; ptScore: number; inFlood: boolean; inWetland: boolean; slope: number | null; distToEdge: number; actualSlope: number | null; demSlopeScore: number; clearance?: number; isFallback?: boolean };
 
         const { ready: demAvailable, wasActive: demWasActive } = mapRef.current
           ? await waitForDEM(mapRef.current)
@@ -2822,7 +2884,7 @@ function MapPanel({ reportId, cachedOverlayGeojson, parcelBoundary, isBboxFallba
           } catch { return 999; }
         };
 
-        const scoredPoints: ScoredPoint[] = insidePoints.map(pt => {
+        const scoredPoints: ScoredPoint[] = candidatePoints.map(pt => {
           const [pLng, pLat] = pt.geometry.coordinates;
           const inFlood = floodUnion
             ? (() => { try { return turf.booleanPointInPolygon(pt, floodUnion); } catch { return false; } })()
@@ -2851,6 +2913,12 @@ function MapPanel({ reportId, cachedOverlayGeojson, parcelBoundary, isBboxFallba
           }
           const edgeBonus = distToEdge > EDGE_BONUS_HI_M ? 20 : distToEdge > EDGE_BONUS_LO_M ? 5 : 0;
 
+          // STEP 3: clearance = distance from candidate to buildable boundary
+          let clearance = distToEdge; // fallback to parcel-edge distance when buildable is unavailable
+          if (buildableLine) {
+            try { clearance = turf.nearestPointOnLine(buildableLine, pt as turf.Feature<turf.Point>, { units: 'meters' }).properties.dist ?? distToEdge; } catch { /* keep fallback */ }
+          }
+
           // Slope: prefer DEM-derived actual slope; fall back to SSURGO slope_h
           const parentPoly = soilPolygons.find(p => { try { return turf.booleanPointInPolygon(pt, p.geojson); } catch { return false; } });
           const ssurgoSlope = parentPoly ? (parseFloat(parentPoly.geojson.properties?.slope_h as string) || null) : null;
@@ -2872,7 +2940,7 @@ function MapPanel({ reportId, cachedOverlayGeojson, parcelBoundary, isBboxFallba
             : (ssurgoSlope === null ? 0 : ssurgoSlope <= 8 ? 0 : ssurgoSlope <= 15 ? -10 : ssurgoSlope <= 25 ? -30 : -999);
 
           const ptScore = (inFlood ? 0 : 40) + (inWetland ? 0 : 40) + edgeBonus + slopePenalty;
-          return { pt: pt as turf.Feature<turf.Point>, ptScore, inFlood, inWetland, slope: ssurgoSlope, distToEdge: Math.round(distToEdge), actualSlope, demSlopeScore };
+          return { pt: pt as turf.Feature<turf.Point>, ptScore, inFlood, inWetland, slope: ssurgoSlope, distToEdge: Math.round(distToEdge), actualSlope, demSlopeScore, clearance: Math.round(clearance) };
         });
 
         const selectFromPool = (pool: ScoredPoint[], spacing: number, limit: number): ScoredPoint[] => {
@@ -2894,6 +2962,73 @@ function MapPanel({ reportId, cachedOverlayGeojson, parcelBoundary, isBboxFallba
 
         console.log('[perc] discarded', exclusionEdgeDiscardCount, 'candidates — too close to wetland/flood edge (<20m)');
         let selected = selectFromPool(scoredPoints, minSpacing, maxPins);
+
+        // ─── STEP 4 + 5: Clearance floor → flatness ranking ──────────────────────
+        if (buildable && selected.length > 0) {
+          const isPolylabelPt = (sp: ScoredPoint): boolean =>
+            polylabelPt !== null &&
+            Math.abs(sp.pt.geometry.coordinates[0] - polylabelPt.geometry.coordinates[0]) < 1e-8 &&
+            Math.abs(sp.pt.geometry.coordinates[1] - polylabelPt.geometry.coordinates[1]) < 1e-8;
+
+          // Ensure polylabel is in the pool — it bypasses all hard gates per spec
+          const polylabelInSelected = selected.some(isPolylabelPt);
+          if (!polylabelInSelected && polylabelPt) {
+            const [plLng, plLat] = polylabelPt.geometry.coordinates;
+            const plActualSlope = demAvailable && mapRef.current ? getActualSlope(mapRef.current, plLng, plLat) : null;
+            let plDistToEdge = 0;
+            if (parcelLine) { try { plDistToEdge = Math.round(turf.nearestPointOnLine(parcelLine, polylabelPt, { units: 'meters' }).properties.dist ?? 0); } catch { /* keep 0 */ } }
+            let plClearance = 0;
+            if (buildableLine) { try { plClearance = Math.round(turf.nearestPointOnLine(buildableLine, polylabelPt, { units: 'meters' }).properties.dist ?? 0); } catch { /* keep 0 */ } }
+            selected = [...selected, { pt: polylabelPt, ptScore: 60, inFlood: false, inWetland: false, slope: null, distToEdge: plDistToEdge, actualSlope: plActualSlope, demSlopeScore: 0, clearance: plClearance }];
+          }
+
+          // Step 4: hard clearance floor — polylabel always survives, others must clear it
+          const maxClearance = Math.max(...selected.map(s => s.clearance ?? 0));
+          const clearanceFloor = CLEARANCE_FLOOR_FRAC * maxClearance;
+          const survivors = selected.filter(s => isPolylabelPt(s) || (s.clearance ?? 0) >= clearanceFloor);
+
+          // Step 5: rank survivors by flatness + clearance
+          const allSlopesNull = survivors.every(s => s.actualSlope === null);
+          if (allSlopesNull) {
+            percPinMethod = 'polylabel-no-dem';
+            // No DEM — rank by clearance descending as best proxy for interior depth
+            survivors.sort((a, b) => (b.clearance ?? 0) - (a.clearance ?? 0));
+          } else {
+            percPinMethod = 'polylabel-flat';
+            const clears = survivors.map(s => s.clearance ?? 0);
+            const minC = Math.min(...clears);
+            const maxC = Math.max(...clears);
+            const cRange = maxC - minC || 1; // guard divide-by-zero
+            const validSlopes = survivors.filter(s => s.actualSlope !== null).map(s => s.actualSlope!);
+            const minS = Math.min(...validSlopes);
+            const maxS = Math.max(...validSlopes);
+            const sRange = maxS - minS || 1; // guard divide-by-zero
+            survivors.sort((a, b) => {
+              const cNormA = ((a.clearance ?? 0) - minC) / cRange;
+              const cNormB = ((b.clearance ?? 0) - minC) / cRange;
+              // null actualSlope → worst-case slopeNorm = 1: can win on clearance, never on flatness
+              const sNormA = a.actualSlope !== null ? (a.actualSlope - minS) / sRange : 1;
+              const sNormB = b.actualSlope !== null ? (b.actualSlope - minS) / sRange : 1;
+              const rankA = W_CLEAR * cNormA + W_FLAT * (1 - sNormA);
+              const rankB = W_CLEAR * cNormB + W_FLAT * (1 - sNormB);
+              return rankB - rankA;
+            });
+          }
+
+          selected = survivors.slice(0, maxPins);
+
+          // Suppression log for ranks with no surviving candidate after the floor
+          for (let rank = selected.length + 1; rank <= maxPins; rank++) {
+            console.log(`[perc-pin] rank: ${rank} suppressed: true reason: no-interior-after-setback`);
+          }
+        } else if (!buildable) {
+          // Step 1 failed — suppress primary zone; expanded search will run
+          for (let rank = 1; rank <= selected.length; rank++) {
+            console.log(`[perc-pin] rank: ${rank} suppressed: true reason: error`);
+          }
+          selected = [];
+        }
+
         let fromExpandedSearch = false;
 
         // Expanded search: if best zone had no clean pins, try all viable/possible polygons
@@ -3026,7 +3161,7 @@ function MapPanel({ reportId, cachedOverlayGeojson, parcelBoundary, isBboxFallba
         }
 
         // Build per-feature tooltip HTML stored as a property so click handler can retrieve it
-        const percFeatures = selected.map(({ pt, inFlood, inWetland, slope, ptScore, distToEdge, actualSlope, isFallback }, i) => {
+        const percFeatures = selected.map(({ pt, inFlood, inWetland, slope, ptScore, distToEdge, actualSlope, isFallback, clearance: pinClearance }, i) => {
           const pinNumber = i + 1;
           const pinColor = '#FFFFFF';
           const rankLabels = ['Best Site', 'Alt Site 2', 'Alt Site 3'];
@@ -3068,6 +3203,7 @@ function MapPanel({ reportId, cachedOverlayGeojson, parcelBoundary, isBboxFallba
           const tooltipHtml = `<div style="background:rgba(10,15,25,0.95);border:1px solid rgba(255,255,255,0.1);border-radius:8px;padding:12px 16px;color:#fff;font-family:inherit;max-width:260px;"><div style="color:#f1f5f9;font-weight:700;font-size:13px;margin-bottom:8px;">${pinTitle}</div><div style="font-size:12px;line-height:1.6;">${rows.join('')}${note ? `<div style="color:rgba(255,255,255,0.65);margin-top:6px;font-size:11px;line-height:1.5;border-top:1px solid rgba(255,255,255,0.08);padding-top:6px;">${note}</div>` : ''}</div></div>`;
 
           console.log(`[perc] pin ${pinNumber} at`, pt.geometry.coordinates, 'score:', ptScore, 'flood:', inFlood, 'wetland:', inWetland, 'slope:', slope ?? 'unknown', 'edge dist:', Math.round(distToEdge) + 'm');
+          console.log(`[perc-pin] rank: ${pinNumber} method: ${isFallback ? 'fallback' : percPinMethod} setback_m: ${SETBACK_M} clearance_floor: ${CLEARANCE_FLOOR_FRAC} clearance_m: ${pinClearance ?? 0} slope_pct: ${actualSlope !== null ? actualSlope.toFixed(1) : 'null'} coord: [${pt.geometry.coordinates[0].toFixed(6)},${pt.geometry.coordinates[1].toFixed(6)}]`);
 
           const iconId = isFallback ? 'perc-circle-fallback' : `perc-circle-${pinNumber}`;
 
