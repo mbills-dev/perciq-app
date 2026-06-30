@@ -1806,6 +1806,20 @@ function MapPanel({ reportId, cachedOverlayGeojson, parcelBoundary, isBboxFallba
   // Build soil polygon overlay from stored DB results, then fetch FEMA/NWI and render all layers
   const applyFullOverlay = async (map: mapboxgl.Map, boundary: Record<string, unknown>, results: SoilResult[], visible: boolean) => {
     if (!isMapAlive(map)) return;
+
+    // Belt-and-suspenders guard: if this exact (boundary, results) combination was already
+    // fully rendered, return immediately before touching any state or markers.
+    const invocationKey = `${JSON.stringify(boundary).slice(0, 80)}-${results.length}`;
+    if (
+      lastOverlayKeyRef.current === invocationKey &&
+      soilRenderedRef.current === true &&
+      femaRenderedRef.current === true &&
+      nwiRenderedRef.current === true
+    ) {
+      console.log('[applyFullOverlay] key unchanged + all layers complete — skipping redundant call');
+      return;
+    }
+
     console.log('[applyFullOverlay] called, soil=', soilRenderedRef.current, 'fema=', femaRenderedRef.current, 'nwi=', nwiRenderedRef.current, 'visible=', visible, 'results=', results.length, 'last results count:', soilResultsCountRef.current);
     // Always keep latestSoilResultsRef current so an in-flight scoring run can use the freshest data.
     if (results.length > latestSoilResultsRef.current.length) {
@@ -3237,12 +3251,10 @@ function MapPanel({ reportId, cachedOverlayGeojson, parcelBoundary, isBboxFallba
         onPercPinsReadyRef.current?.(pins);
 
         // Perc pins as DOM Markers — stacks above the zone-badge DOM markers (z-index 10 vs 1).
-        // Remove any legacy symbol layer left from a previous session.
+        // Remove any legacy symbol layer left from a previous session (percMarkersRef already
+        // cleared at the top of applyFullOverlay — do NOT clear again here).
         try { if (map.getLayer('perc-pins-layer')) map.removeLayer('perc-pins-layer'); } catch { /* ignore */ }
         try { if (map.getSource('perc-pins')) map.removeSource('perc-pins'); } catch { /* ignore */ }
-
-        percMarkersRef.current.forEach(m => m.remove());
-        percMarkersRef.current = [];
 
         const drawPinCanvas = (num: number, fill: string, border: string): HTMLCanvasElement => {
           const size = 26, PAD = 4, canvasSize = size + PAD * 2;
@@ -5444,6 +5456,21 @@ export default function ReportDetail({ reportId, onBack, isPublic = false }: Rep
     </div>
   );
 
+  // Stable prop references for MapPanel — prevent the applyFullOverlay effect from
+  // re-firing on every parent render caused by downstream state setters (setZoneBadgeColors etc.).
+  // React state refs are already stable between renders, but belt-and-suspenders memoization
+  // ensures new references are only produced when actual content changes.
+  const stableParcelBoundary = useMemo(
+    () => activeBoundary,
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [report?.id, boundarySource, isBboxFallback],
+  );
+  const stableSoilResults = useMemo(
+    () => soilResults,
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [report?.id, soilResults.length],
+  );
+
   return (
     <div className="flex flex-col md:flex-row overflow-hidden" style={{ height: 'calc(100vh - 3.5rem)' }}>
       {/* Map — single instance, responsive: 250px tall full-width on mobile, 60% wide full-height on desktop */}
@@ -5452,10 +5479,10 @@ export default function ReportDetail({ reportId, onBack, isPublic = false }: Rep
           <MapPanel
             reportId={reportId}
             cachedOverlayGeojson={report?.overlay_geojson ?? null}
-            parcelBoundary={activeBoundary}
+            parcelBoundary={stableParcelBoundary}
             isBboxFallback={isBboxFallback}
             boundarySource={boundarySource}
-            soilResults={soilResults}
+            soilResults={stableSoilResults}
             lat={parcel?.lat ?? null}
             lng={parcel?.lng ?? null}
             onMapReady={(map) => {
