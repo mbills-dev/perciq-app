@@ -628,6 +628,21 @@ export default function SettingsPage({ user, initialTab }: Props) {
                   Upgrade Plan
                   <ArrowRight className="w-3.5 h-3.5" />
                 </button>
+
+                {profile?.stripe_customer_id && (
+                  <div className="mt-3 pt-3 border-t border-white/5">
+                    <p className="text-xs text-white/35 mb-2">
+                      You have payment info on file. You can manage or remove it at any time.
+                    </p>
+                    <button
+                      onClick={handleManageSubscription}
+                      disabled={portalLoading}
+                      className="text-xs text-white/40 hover:text-white/70 transition-colors underline underline-offset-2 disabled:opacity-50"
+                    >
+                      {portalLoading ? 'Opening...' : 'Manage billing / remove card'}
+                    </button>
+                  </div>
+                )}
               </div>
             )}
           </div>
