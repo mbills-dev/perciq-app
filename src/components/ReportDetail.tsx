@@ -4684,22 +4684,23 @@ export default function ReportDetail({ reportId, onBack, isPublic = false }: Rep
   const nearbyCount = scoreResult?.nearby_tests_summary?.matching_within_5mi ?? 0;
 
   // ── HUD derived state ─────────────────────────────────────────────────────
-  // Determine the active HUD data: hover takes priority, else tab selection
-  const tabPolygon = (() => {
+  // Memoized so getSiteAlerts (and the [alerts] log) only re-execute when the
+  // inputs that actually determine the displayed soil zone change — not on every
+  // unrelated state update (setZoneBadgeColors, setDemSlopeByMukey, etc.).
+  // tabPolygon is computed inside the factory so its object identity doesn't
+  // become an unstable dep; mapSoilPolygons and activeTab are stable state refs.
+  const hudData: SoilHoverData | null = useMemo(() => {
+    if (hudHover) return hudHover;
+    if (hudLocked) return hudLocked;
+    // Tab-selection path: pick highest-scoring polygon for the active bucket
     if (activeTab === 'parcel') return null;
     const byBucket = mapSoilPolygons.filter(p => p.bucket === activeTab);
     if (!byBucket.length) return null;
-    // Pick highest-scoring polygon for the tab
-    return byBucket.reduce((best, p) => {
+    const tabPolygon = byBucket.reduce((best, p) => {
       const s = (p.geojson.properties as Record<string, unknown>)?.suitabilityScore as number ?? 0;
       const bs = (best.geojson.properties as Record<string, unknown>)?.suitabilityScore as number ?? 0;
       return s > bs ? p : best;
     });
-  })();
-
-  // Priority: hover preview > locked (click) > tab selection > parcel default
-  const hudData: SoilHoverData | null = hudHover ?? hudLocked ?? (() => {
-    if (!tabPolygon) return null;
     const props = tabPolygon.geojson.properties as Record<string, unknown>;
     return {
       mukey: tabPolygon.mukey,
@@ -4725,7 +4726,8 @@ export default function ReportDetail({ reportId, onBack, isPublic = false }: Rep
       clay40DepthCm: props.clay40DepthCm != null && props.clay40DepthCm !== 'null' ? Number(props.clay40DepthCm) : null,
       rawKsat: props.rawKsat != null && props.rawKsat !== 'null' ? Number(props.rawKsat) : null,
     };
-  })();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [hudHover, hudLocked, mapSoilPolygons, activeTab]);
 
   // Parcel-level stats for bottom strip
   const floodPct = envCoverage?.floodPct ?? 0;
@@ -4837,7 +4839,9 @@ export default function ReportDetail({ reportId, onBack, isPublic = false }: Rep
 
   const verdict = getVerdict(hudData);
   const flags = getFlags(hudData);
-  const siteAlerts = getSiteAlerts(hudData);
+  // Memoized: getSiteAlerts (and its [alerts] log) only re-runs when hudData identity changes.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const siteAlerts = useMemo(() => getSiteAlerts(hudData), [hudData]);
   const isHovering = !!hudHover;
   const isLocked = !!hudLocked && !hudHover;
   const activeSource = hudData ?? { drainScore: 0, ksatScore: 0, slopeScore: 0, wtScore: 0, pondingScore: null as number | null, restrictiveLayerScore: null as number | null, floodingScore: null as number | null, floodOverlapPct: 0, wetlandOverlapPct: 0, soilName: '—', finalScore: 0, bucket: 'no-data' as const, mukey: '', rawWatertableInches: null as number | null, rawResdeptCm: null as number | null, rawFlodfreqcl: null as string | null, rawSlopePct: null as number | null, zoneSlopeDemPct: null as number | null, clay40DepthCm: null as number | null, rawKsat: null as number | null };
