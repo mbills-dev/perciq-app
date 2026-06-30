@@ -4001,6 +4001,20 @@ export default function ReportDetail({ reportId, onBack, isPublic = false }: Rep
   const [activeBoundary, setActiveBoundary] = useState<Record<string, unknown> | null>(null);
   const [isBboxFallback, setIsBboxFallback] = useState(false);
   const [boundarySource, setBoundarySource] = useState<string | null>(null);
+
+  // Stable prop references for MapPanel — new object/array identity only when actual content
+  // changes, not on every parent re-render. Prevents applyFullOverlay from firing redundantly
+  // when downstream state setters (setZoneBadgeColors etc.) cause a parent re-render.
+  const stableParcelBoundary = useMemo(
+    () => activeBoundary,
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [report?.id, boundarySource, isBboxFallback],
+  );
+  const stableSoilResults = useMemo(
+    () => soilResults,
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [report?.id, soilResults.length],
+  );
   const [envCoverage, setEnvCoverage] = useState<EnvironmentalCoverage | null>(null);
   const [bestZoneInFloodWarning, setBestZoneInFloodWarning] = useState(false);
   const [percFallbackWarning, setPercFallbackWarning] = useState<'exhausted' | 'expanded' | null>(null);
@@ -5454,21 +5468,6 @@ export default function ReportDetail({ reportId, onBack, isPublic = false }: Rep
         </div>
       )}
     </div>
-  );
-
-  // Stable prop references for MapPanel — prevent the applyFullOverlay effect from
-  // re-firing on every parent render caused by downstream state setters (setZoneBadgeColors etc.).
-  // React state refs are already stable between renders, but belt-and-suspenders memoization
-  // ensures new references are only produced when actual content changes.
-  const stableParcelBoundary = useMemo(
-    () => activeBoundary,
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [report?.id, boundarySource, isBboxFallback],
-  );
-  const stableSoilResults = useMemo(
-    () => soilResults,
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [report?.id, soilResults.length],
   );
 
   return (
