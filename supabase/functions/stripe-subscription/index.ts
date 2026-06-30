@@ -104,6 +104,7 @@ Deno.serve(async (req: Request) => {
       plan,
       subscription_status: sub.status,
       plan_renewal_date: renewalDate,
+      cancel_at_period_end: sub.cancel_at_period_end,
       monthly_analyses_used: profile.monthly_analyses_used ?? 0,
       analyses_reset_at: profile.analyses_reset_at ?? null,
     }), {

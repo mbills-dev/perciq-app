@@ -25,6 +25,7 @@ interface StripeData {
   plan: PlanTier;
   subscription_status: string;
   plan_renewal_date: string | null;
+  cancel_at_period_end: boolean;
   monthly_analyses_used: number;
   analyses_reset_at: string | null;
 }
@@ -334,6 +335,7 @@ export default function SettingsPage({ user, initialTab }: Props) {
 
   const activePlan = (stripeData?.plan ?? profile?.plan ?? 'free') as PlanTier;
   const subStatus = stripeData?.subscription_status ?? profile?.subscription_status ?? 'inactive';
+  const cancelAtPeriodEnd = stripeData?.cancel_at_period_end ?? false;
   const renewalDate = stripeData?.plan_renewal_date ?? profile?.plan_renewal_date;
   const renewalFormatted = renewalDate
     ? new Date(renewalDate).toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: '2-digit' })
@@ -539,8 +541,8 @@ export default function SettingsPage({ user, initialTab }: Props) {
                     <span className="text-sm font-semibold text-white capitalize">{activePlan}</span>
                   </div>
                   <div className="flex items-center justify-between py-3 border-b border-white/5">
-                    <span className="text-sm text-white/50">Renewal Date</span>
-                    <span className="text-sm text-white/70">{renewalFormatted ?? '—'}</span>
+                    <span className="text-sm text-white/50">{cancelAtPeriodEnd ? 'Access Through' : 'Renewal Date'}</span>
+                    <span className={`text-sm ${cancelAtPeriodEnd ? 'text-amber-400' : 'text-white/70'}`}>{renewalFormatted ?? '—'}</span>
                   </div>
                   <div className="flex items-center justify-between py-3">
                     <span className="text-sm text-white/50">Analyses this month</span>
@@ -583,8 +585,8 @@ export default function SettingsPage({ user, initialTab }: Props) {
                   </button>
                 </div>
 
-                {/* Cancel button — only shown for active/trialing paid subscriptions */}
-                {(subStatus === 'active' || subStatus === 'trialing') && (
+                {/* Cancel button — only shown for active/trialing subscriptions not already scheduled to cancel */}
+                {(subStatus === 'active' || subStatus === 'trialing') && !cancelAtPeriodEnd && (
                   <div className="mt-3 pt-3 border-t border-white/5">
                     <button
                       onClick={() => setCancelStep('confirm')}
@@ -592,6 +594,13 @@ export default function SettingsPage({ user, initialTab }: Props) {
                     >
                       Cancel subscription
                     </button>
+                  </div>
+                )}
+                {cancelAtPeriodEnd && (
+                  <div className="mt-3 pt-3 border-t border-white/5">
+                    <p className="text-xs text-amber-400/70">
+                      Your subscription is canceled and will not renew. You have full access until {renewalFormatted ?? 'the end of your billing period'}.
+                    </p>
                   </div>
                 )}
               </>
