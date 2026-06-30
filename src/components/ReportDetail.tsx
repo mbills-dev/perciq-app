@@ -3434,8 +3434,8 @@ function MapPanel({ reportId, cachedOverlayGeojson, parcelBoundary, isBboxFallba
       addOrUpdateBoundary(map, parcelBoundary, isBboxFallback);
       if (!isBboxFallback) { fitToBoundary(map, parcelBoundary); markerRef.current?.remove(); markerRef.current = null; }
       else map.easeTo({ zoom: zoomFromBbox(parcelBoundary), duration: 800 });
-      if (stableSoilResults.length > 0) {
-        const key = `${JSON.stringify(parcelBoundary).slice(0, 80)}-${stableSoilResults.length}`;
+      if (soilResults.length > 0) {
+        const key = `${JSON.stringify(parcelBoundary).slice(0, 80)}-${soilResults.length}`;
         if (lastOverlayKeyRef.current !== key) {
           lastOverlayKeyRef.current = key;
           soilRenderedRef.current = false;
@@ -3443,21 +3443,21 @@ function MapPanel({ reportId, cachedOverlayGeojson, parcelBoundary, isBboxFallba
           nwiRenderedRef.current = false;
           bestZoneRef.current = null;
           soilResultsCountRef.current = 0;
-          latestSoilResultsRef.current = stableSoilResults;
+          latestSoilResultsRef.current = soilResults;
         }
         // Always register a retry handler pointing at the current boundary/results
         retrySoilLoadRef.current = () => {
           soilRenderedRef.current = false;
           lastOverlayKeyRef.current = '';
           setSdaError(false);
-          applyFullOverlay(map, parcelBoundary, stableSoilResults, soilVisible);
+          applyFullOverlay(map, parcelBoundary, soilResults, soilVisible);
         };
-        await applyFullOverlay(map, parcelBoundary, stableSoilResults, soilVisible);
+        await applyFullOverlay(map, parcelBoundary, soilResults, soilVisible);
       }
     };
     map.isStyleLoaded() ? apply() : map.once('load', apply);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [parcelBoundary, isBboxFallback, stableSoilResults]);
+  }, [parcelBoundary, isBboxFallback, soilResults]);
 
   // Toggle soil overlay + zone badge visibility
   useEffect(() => {
