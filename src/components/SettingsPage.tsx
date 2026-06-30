@@ -6,11 +6,13 @@ import type { User } from '@supabase/supabase-js';
 import {
   User as UserIcon, CreditCard, Lock, Building2,
   CheckCircle2, AlertCircle, Loader2, Zap, ArrowRight,
-  Check, ExternalLink, ChevronDown,
+  Check, ExternalLink, ChevronDown, X, XCircle,
 } from 'lucide-react';
 
 type Tab = 'profile' | 'billing';
 type BillingView = 'overview' | 'upgrade';
+// Step sequence for the cancellation modal flow — insert future retention steps between 'survey' and 'confirm'
+type CancelStep = 'confirm' | 'survey' | 'done' | null;
 
 const INPUT =
   'w-full bg-white/5 border border-white/10 rounded-lg px-3.5 py-2.5 text-sm text-white placeholder-white/25 focus:outline-none focus:border-primary-500/60 focus:bg-white/8 transition-all';
@@ -116,6 +118,14 @@ export default function SettingsPage({ user, initialTab }: Props) {
   const [portalLoading, setPortalLoading] = useState(false);
   const [checkoutLoading, setCheckoutLoading] = useState<string | null>(null);
   const [billingInterval, setBillingInterval] = useState<'monthly' | 'annual'>('monthly');
+
+  // Cancel subscription modal state
+  const [cancelStep, setCancelStep] = useState<CancelStep>(null);
+  const [cancelLoading, setCancelLoading] = useState(false);
+  const [cancelError, setCancelError] = useState<string | null>(null);
+  const [cancelPeriodEnd, setCancelPeriodEnd] = useState<string | null>(null);
+  const [surveyWhat, setSurveyWhat] = useState('');
+  const [surveyLiked, setSurveyLiked] = useState('');
 
   // Profile fields
   const [firstName, setFirstName] = useState('');
@@ -265,6 +275,52 @@ export default function SettingsPage({ user, initialTab }: Props) {
       showToast('error', 'Could not start checkout.');
     } finally {
       setCheckoutLoading(null);
+    }
+  }
+
+  function closeCancelFlow() {
+    setCancelStep(null);
+    setCancelError(null);
+    setCancelPeriodEnd(null);
+    setSurveyWhat('');
+    setSurveyLiked('');
+  }
+
+  async function handleCancelSubscription() {
+    setCancelLoading(true);
+    setCancelError(null);
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session) { setCancelError('Session expired — please refresh and try again.'); return; }
+
+      // FUTURE: optional retention-offer step(s) insert here, before calling cancel-subscription
+
+      const result = await callEdgeFunction('cancel-subscription', {}, session.access_token) as { success?: boolean; current_period_end?: string; error?: string };
+
+      if (!result.success) {
+        setCancelError(result.error ?? 'Cancellation failed — please try again.');
+        return;
+      }
+
+      setCancelPeriodEnd(result.current_period_end ?? null);
+
+      // Save survey feedback if either field is non-empty — fire-and-forget so a
+      // feedback insert failure never blocks the confirmed cancellation flow
+      if (surveyWhat.trim() || surveyLiked.trim()) {
+        supabase.from('subscription_feedback').insert({
+          user_id: user.id,
+          what_didnt_work: surveyWhat.trim() || null,
+          what_liked: surveyLiked.trim() || null,
+        }).then(({ error }) => {
+          if (error) console.warn('[cancel] feedback insert failed (non-blocking):', error.message);
+        });
+      }
+
+      setCancelStep('done');
+    } catch (err) {
+      setCancelError(err instanceof Error ? err.message : 'Cancellation failed — please try again.');
+    } finally {
+      setCancelLoading(false);
     }
   }
 
@@ -526,6 +582,18 @@ export default function SettingsPage({ user, initialTab }: Props) {
                     Change Plan
                   </button>
                 </div>
+
+                {/* Cancel button — only shown for active/trialing paid subscriptions */}
+                {(subStatus === 'active' || subStatus === 'trialing') && (
+                  <div className="mt-3 pt-3 border-t border-white/5">
+                    <button
+                      onClick={() => setCancelStep('confirm')}
+                      className="text-xs text-red-400/70 hover:text-red-400 transition-colors underline underline-offset-2"
+                    >
+                      Cancel subscription
+                    </button>
+                  </div>
+                )}
               </>
             ) : (
               /* Free plan state */
@@ -724,6 +792,147 @@ export default function SettingsPage({ user, initialTab }: Props) {
           <p className="text-xs text-white/25 text-center mt-6">
             All plans include a 7-day money-back guarantee. Cancel anytime.
           </p>
+        </div>
+      )}
+
+      {/* ── Cancellation Modal Flow ── */}
+      {cancelStep !== null && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
+
+          {/* Modal A — "Are You Sure?" */}
+          {cancelStep === 'confirm' && (
+            <div className="relative w-full max-w-md bg-navy-800 border border-white/10 rounded-2xl p-6 shadow-2xl">
+              <button
+                onClick={closeCancelFlow}
+                className="absolute top-4 right-4 text-white/30 hover:text-white/70 transition-colors"
+                aria-label="Close"
+              >
+                <X className="w-4 h-4" />
+              </button>
+
+              <div className="flex items-center gap-3 mb-4">
+                <div className="w-9 h-9 rounded-xl bg-red-500/15 border border-red-500/25 flex items-center justify-center flex-shrink-0">
+                  <XCircle className="w-4.5 h-4.5 text-red-400" />
+                </div>
+                <h2 className="text-base font-bold text-white">Are You Sure?</h2>
+              </div>
+
+              <p className="text-sm text-white/55 mb-6 leading-relaxed">
+                Your subscription will be canceled at the end of your current billing period. You'll retain full access until then.
+              </p>
+
+              <div className="flex flex-col gap-2.5">
+                <button
+                  onClick={() => setCancelStep('survey')}
+                  className="w-full py-2.5 rounded-xl bg-red-500/15 hover:bg-red-500/25 border border-red-500/30 text-red-400 text-sm font-semibold transition-all duration-200"
+                >
+                  Cancel Subscription
+                </button>
+                <button
+                  onClick={closeCancelFlow}
+                  className="w-full py-2.5 rounded-xl bg-white/5 hover:bg-white/10 border border-white/10 text-white text-sm font-semibold transition-all duration-200"
+                >
+                  Never mind, I'll stay
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* Modal B — Survey */}
+          {cancelStep === 'survey' && (
+            <div className="relative w-full max-w-md bg-navy-800 border border-white/10 rounded-2xl p-6 shadow-2xl">
+              <button
+                onClick={closeCancelFlow}
+                className="absolute top-4 right-4 text-white/30 hover:text-white/70 transition-colors"
+                aria-label="Close"
+              >
+                <X className="w-4 h-4" />
+              </button>
+
+              <h2 className="text-base font-bold text-white mb-1">We're Sorry to See You Go</h2>
+              <p className="text-xs text-white/35 mb-5">Both fields are optional — any feedback helps us improve.</p>
+
+              <div className="space-y-4 mb-5">
+                <div>
+                  <label className={LABEL}>What didn't work for you?</label>
+                  <textarea
+                    className={INPUT + ' resize-none h-20'}
+                    value={surveyWhat}
+                    onChange={e => setSurveyWhat(e.target.value)}
+                    placeholder="Pricing, missing features, didn't need it…"
+                  />
+                </div>
+                <div>
+                  <label className={LABEL}>What did you like?</label>
+                  <textarea
+                    className={INPUT + ' resize-none h-20'}
+                    value={surveyLiked}
+                    onChange={e => setSurveyLiked(e.target.value)}
+                    placeholder="What worked well for you?"
+                  />
+                </div>
+              </div>
+
+              {cancelError && (
+                <div className="flex items-center gap-2 text-xs text-red-400 bg-red-500/10 border border-red-500/20 rounded-lg px-3 py-2 mb-4">
+                  <AlertCircle className="w-3.5 h-3.5 flex-shrink-0" />
+                  {cancelError}
+                </div>
+              )}
+
+              <div className="flex flex-col gap-2.5">
+                <button
+                  onClick={handleCancelSubscription}
+                  disabled={cancelLoading}
+                  className="w-full py-2.5 rounded-xl bg-red-500/15 hover:bg-red-500/25 border border-red-500/30 text-red-400 text-sm font-semibold transition-all duration-200 disabled:opacity-50 flex items-center justify-center gap-2"
+                >
+                  {cancelLoading && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
+                  Continue
+                </button>
+                <button
+                  onClick={closeCancelFlow}
+                  disabled={cancelLoading}
+                  className="w-full py-2.5 rounded-xl bg-white/5 hover:bg-white/10 border border-white/10 text-white text-sm font-semibold transition-all duration-200 disabled:opacity-40"
+                >
+                  Never mind, I'll stay
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* Modal C — Confirmation */}
+          {cancelStep === 'done' && (
+            <div className="relative w-full max-w-md bg-navy-800 border border-white/10 rounded-2xl p-6 shadow-2xl">
+              <div className="flex flex-col items-center text-center mb-5">
+                <div className="w-12 h-12 rounded-full bg-emerald-500/15 border border-emerald-500/25 flex items-center justify-center mb-4">
+                  <CheckCircle2 className="w-5 h-5 text-emerald-400" />
+                </div>
+                <h2 className="text-base font-bold text-white mb-2">Subscription Canceled</h2>
+                <p className="text-sm text-white/55 leading-relaxed">
+                  Your subscription is canceled and will remain active until{' '}
+                  {cancelPeriodEnd
+                    ? <strong className="text-white font-bold">
+                        {new Date(cancelPeriodEnd).toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' })}
+                      </strong>
+                    : 'the end of your billing period'
+                  }.
+                </p>
+              </div>
+
+              <button
+                onClick={() => {
+                  closeCancelFlow();
+                  // Best-effort re-fetch to update the Billing tab.
+                  // The webhook (customer.subscription.updated) owns the user_profiles write,
+                  // so this may briefly still show the old status if the webhook hasn't landed yet — that is expected and fine.
+                  loadStripeData();
+                }}
+                className="w-full py-2.5 rounded-xl bg-white/8 hover:bg-white/12 border border-white/10 text-white text-sm font-semibold transition-all duration-200"
+              >
+                Got it
+              </button>
+            </div>
+          )}
         </div>
       )}
     </div>
