@@ -2615,8 +2615,7 @@ function MapPanel({ reportId, cachedOverlayGeojson, parcelBoundary, isBboxFallba
     zoneBadgeMarkersRef.current = [];
 
     const BADGE_PIN_CLEAR_PX = 40;
-    let primaryBadgeMarker: mapboxgl.Marker | null = null;
-    let primaryBadgePoly: turf.Feature<turf.Polygon | turf.MultiPolygon> | null = null;
+    const zoneBadgeEntries: { marker: mapboxgl.Marker; poly: turf.Feature<turf.Polygon | turf.MultiPolygon> }[] = [];
 
     const zoneBadgeConfigs: { label: BestZone['label']; rank: string }[] = [
       { label: 'Primary',     rank: 'Best' },
@@ -2716,7 +2715,7 @@ function MapPanel({ reportId, cachedOverlayGeojson, parcelBoundary, isBboxFallba
       const marker = new mapboxgl.Marker({ element: el, anchor: 'center' }).setLngLat(badgeLngLat).addTo(map);
       zoneMarkersRef.current.push(marker);
       zoneBadgeMarkersRef.current.push(marker);
-      if (label === 'Primary') { primaryBadgeMarker = marker; primaryBadgePoly = badgePoly; }
+      zoneBadgeEntries.push({ marker, poly: badgePoly });
       renderedBadgeColors.push(borderColor);
       applyZoneMarkerTabFilter(el, activeTabRef.current ?? 'parcel');
     }
@@ -3330,12 +3329,13 @@ function MapPanel({ reportId, cachedOverlayGeojson, parcelBoundary, isBboxFallba
           });
         } catch (markerErr) { console.warn('[perc] marker error:', (markerErr as Error).message); }
 
-        // Nudge Primary zone badge away from perc pins if pixel distance < threshold.
-        // When badge and pin are at the same pixel (dist < 1), goes straight to cardinal
-        // directions. If no in-polygon position is found at any fraction, places the badge
-        // at the zone edge (outside polygon) rather than leaving it overlapping the pin.
-        if (primaryBadgeMarker && percMarkersRef.current.length > 0) {
-          let { lng: bLng, lat: bLat } = primaryBadgeMarker.getLngLat();
+        // Nudge each zone badge away from any perc pin within BADGE_PIN_CLEAR_PX.
+        // When badge and pin are at the same pixel (dist < 1), go straight to cardinal
+        // directions. If no in-polygon position is found at any fraction, nudge to the
+        // zone edge so the label is at least visually separated from the pin.
+        for (const { marker: badgeMarker, poly: badgePoly } of zoneBadgeEntries) {
+          if (percMarkersRef.current.length === 0) break;
+          let { lng: bLng, lat: bLat } = badgeMarker.getLngLat();
           let nudged = false;
           for (const pinMarker of percMarkersRef.current) {
             const { lng: pLng, lat: pLat } = pinMarker.getLngLat();
@@ -3347,8 +3347,6 @@ function MapPanel({ reportId, cachedOverlayGeojson, parcelBoundary, isBboxFallba
             console.log('[zones] nudge dist px:', dist.toFixed(2), '— threshold:', BADGE_PIN_CLEAR_PX);
             if (dist < BADGE_PIN_CLEAR_PX) {
               const maxClearDist = BADGE_PIN_CLEAR_PX + 6;
-              // When badge and pin are essentially at the same pixel, the direction
-              // vector from dx/dy is noise — go straight to upward as primary direction.
               const hasDirection = dist >= 1;
               const nx = hasDirection ? dx / dist : 0;
               const ny = hasDirection ? dy / dist : -1;
@@ -3367,7 +3365,7 @@ function MapPanel({ reportId, cachedOverlayGeojson, parcelBoundary, isBboxFallba
                   try {
                     const cand = map.unproject([cx, cy] as [number, number]);
                     const candPt = turf.point([cand.lng, cand.lat]);
-                    if (!primaryBadgePoly || turf.booleanPointInPolygon(candPt, primaryBadgePoly)) {
+                    if (!badgePoly || turf.booleanPointInPolygon(candPt, badgePoly)) {
                       bLng = cand.lng; bLat = cand.lat; placed = true; nudged = true;
                       console.log('[zones] badge nudged (in-polygon) at', clearDist.toFixed(0), 'px');
                       break outer;
@@ -3375,8 +3373,7 @@ function MapPanel({ reportId, cachedOverlayGeojson, parcelBoundary, isBboxFallba
                   } catch { /* skip bad candidate */ }
                 }
               }
-              // Pass 2: zone too small to fit badge inside — nudge to zone edge without
-              // polygon check so the badge is at least visually separated from the pin.
+              // Pass 2: zone too small — nudge to edge without polygon check
               if (!placed) {
                 const fallbackDist = maxClearDist * 0.33;
                 const pxCandidates: [number, number][] = [
@@ -3397,7 +3394,7 @@ function MapPanel({ reportId, cachedOverlayGeojson, parcelBoundary, isBboxFallba
               if (!placed) console.log('[zones] badge nudge: all candidates failed');
             }
           }
-          if (nudged) primaryBadgeMarker.setLngLat([bLng, bLat]);
+          if (nudged) badgeMarker.setLngLat([bLng, bLat]);
         }
 
         console.log(`[perc] ${allSelected.length} perc site pin(s) placed from ${totalCandidates} candidate points`);
