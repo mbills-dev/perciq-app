@@ -3281,7 +3281,7 @@ function MapPanel({ reportId, cachedOverlayGeojson, parcelBoundary, isBboxFallba
             const pinCanvas = drawPinCanvas(props.rank, fill, border);
 
             const wrapper = document.createElement('div');
-            wrapper.style.cssText = 'cursor:pointer;z-index:10;position:relative;';
+            wrapper.style.cssText = 'cursor:pointer;z-index:10;';
             wrapper.style.display = percVisible ? 'block' : 'none';
             wrapper.appendChild(pinCanvas);
 
