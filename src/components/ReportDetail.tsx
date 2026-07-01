@@ -2614,6 +2614,10 @@ function MapPanel({ reportId, cachedOverlayGeojson, parcelBoundary, isBboxFallba
     zoneBadgeMarkersRef.current.forEach(m => m.remove());
     zoneBadgeMarkersRef.current = [];
 
+    const BADGE_PIN_CLEAR_PX = 40;
+    let primaryBadgeMarker: mapboxgl.Marker | null = null;
+    let primaryBadgePoly: turf.Feature<turf.Polygon | turf.MultiPolygon> | null = null;
+
     const zoneBadgeConfigs: { label: BestZone['label']; rank: string }[] = [
       { label: 'Primary',     rank: 'Best' },
       { label: 'Alternative', rank: '2nd'  },
@@ -2712,6 +2716,7 @@ function MapPanel({ reportId, cachedOverlayGeojson, parcelBoundary, isBboxFallba
       const marker = new mapboxgl.Marker({ element: el, anchor: 'center' }).setLngLat(badgeLngLat).addTo(map);
       zoneMarkersRef.current.push(marker);
       zoneBadgeMarkersRef.current.push(marker);
+      if (label === 'Primary') { primaryBadgeMarker = marker; primaryBadgePoly = badgePoly; }
       renderedBadgeColors.push(borderColor);
       applyZoneMarkerTabFilter(el, activeTabRef.current ?? 'parcel');
     }
@@ -3298,6 +3303,47 @@ function MapPanel({ reportId, cachedOverlayGeojson, parcelBoundary, isBboxFallba
             percMarkersRef.current.push(marker);
           });
         } catch (markerErr) { console.warn('[perc] marker error:', (markerErr as Error).message); }
+
+        // Nudge Primary zone badge away from perc pins if pixel distance < threshold
+        if (primaryBadgeMarker && percMarkersRef.current.length > 0) {
+          let { lng: bLng, lat: bLat } = primaryBadgeMarker.getLngLat();
+          let nudged = false;
+          for (const pinMarker of percMarkersRef.current) {
+            const { lng: pLng, lat: pLat } = pinMarker.getLngLat();
+            const bPx = map.project([bLng, bLat] as [number, number]);
+            const pPx = map.project([pLng, pLat] as [number, number]);
+            const dx = bPx.x - pPx.x;
+            const dy = bPx.y - pPx.y;
+            const dist = Math.sqrt(dx * dx + dy * dy);
+            if (dist < BADGE_PIN_CLEAR_PX) {
+              const clearDist = BADGE_PIN_CLEAR_PX + 6;
+              const len = dist < 0.5 ? 1 : dist;
+              const nx = dx / len;
+              const ny = dy / len;
+              // Primary direction: away from pin. Fallback: cardinal directions.
+              const pxCandidates: [number, number][] = [
+                [pPx.x + nx * clearDist, pPx.y + ny * clearDist],
+                [pPx.x,                  pPx.y - clearDist],
+                [pPx.x,                  pPx.y + clearDist],
+                [pPx.x - clearDist,      pPx.y            ],
+                [pPx.x + clearDist,      pPx.y            ],
+              ];
+              let placed = false;
+              for (const [cx, cy] of pxCandidates) {
+                try {
+                  const cand = map.unproject([cx, cy] as [number, number]);
+                  const candPt = turf.point([cand.lng, cand.lat]);
+                  if (!primaryBadgePoly || turf.booleanPointInPolygon(candPt, primaryBadgePoly)) {
+                    bLng = cand.lng; bLat = cand.lat; placed = true; nudged = true;
+                    break;
+                  }
+                } catch { /* skip bad candidate */ }
+              }
+              if (!placed) console.log('[zones] badge nudge: no valid position found, keeping original');
+            }
+          }
+          if (nudged) primaryBadgeMarker.setLngLat([bLng, bLat]);
+        }
 
         console.log(`[perc] ${selected.length} perc site pin(s) placed from ${insidePoints.length} candidate points`);
 
