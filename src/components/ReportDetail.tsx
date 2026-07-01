@@ -3305,8 +3305,9 @@ function MapPanel({ reportId, cachedOverlayGeojson, parcelBoundary, isBboxFallba
         } catch (markerErr) { console.warn('[perc] marker error:', (markerErr as Error).message); }
 
         // Nudge Primary zone badge away from perc pins if pixel distance < threshold.
-        // Uses progressively smaller clearance fractions for small zones.
-        console.log('[zones] nudge check — primaryBadgeMarker:', !!primaryBadgeMarker, 'percPins:', percMarkersRef.current.length);
+        // When badge and pin are at the same pixel (dist < 1), goes straight to cardinal
+        // directions. If no in-polygon position is found at any fraction, places the badge
+        // at the zone edge (outside polygon) rather than leaving it overlapping the pin.
         if (primaryBadgeMarker && percMarkersRef.current.length > 0) {
           let { lng: bLng, lat: bLat } = primaryBadgeMarker.getLngLat();
           let nudged = false;
@@ -3317,13 +3318,15 @@ function MapPanel({ reportId, cachedOverlayGeojson, parcelBoundary, isBboxFallba
             const dx = bPx.x - pPx.x;
             const dy = bPx.y - pPx.y;
             const dist = Math.sqrt(dx * dx + dy * dy);
-            console.log('[zones] nudge dist px:', dist.toFixed(1), '— threshold:', BADGE_PIN_CLEAR_PX);
+            console.log('[zones] nudge dist px:', dist.toFixed(2), '— threshold:', BADGE_PIN_CLEAR_PX);
             if (dist < BADGE_PIN_CLEAR_PX) {
               const maxClearDist = BADGE_PIN_CLEAR_PX + 6;
-              const len = dist < 0.5 ? 1 : dist;
-              const nx = dx / len;
-              const ny = dy / len;
-              // Try full clearance first, then progressively smaller fractions for small zones
+              // When badge and pin are essentially at the same pixel, the direction
+              // vector from dx/dy is noise — go straight to upward as primary direction.
+              const hasDirection = dist >= 1;
+              const nx = hasDirection ? dx / dist : 0;
+              const ny = hasDirection ? dy / dist : -1;
+              // Pass 1: try in-polygon positions at progressively smaller clearances
               const distSteps = [maxClearDist, maxClearDist * 0.75, maxClearDist * 0.5, maxClearDist * 0.33];
               let placed = false;
               outer: for (const clearDist of distSteps) {
@@ -3340,13 +3343,32 @@ function MapPanel({ reportId, cachedOverlayGeojson, parcelBoundary, isBboxFallba
                     const candPt = turf.point([cand.lng, cand.lat]);
                     if (!primaryBadgePoly || turf.booleanPointInPolygon(candPt, primaryBadgePoly)) {
                       bLng = cand.lng; bLat = cand.lat; placed = true; nudged = true;
-                      console.log('[zones] badge nudged at clearDist:', clearDist.toFixed(1), 'px');
+                      console.log('[zones] badge nudged (in-polygon) at', clearDist.toFixed(0), 'px');
                       break outer;
                     }
                   } catch { /* skip bad candidate */ }
                 }
               }
-              if (!placed) console.log('[zones] badge nudge: zone too small at all fractions, keeping original');
+              // Pass 2: zone too small to fit badge inside — nudge to zone edge without
+              // polygon check so the badge is at least visually separated from the pin.
+              if (!placed) {
+                const fallbackDist = maxClearDist * 0.33;
+                const pxCandidates: [number, number][] = [
+                  [pPx.x + nx * fallbackDist, pPx.y + ny * fallbackDist],
+                  [pPx.x,                     pPx.y - fallbackDist],
+                  [pPx.x - fallbackDist,      pPx.y               ],
+                  [pPx.x + fallbackDist,      pPx.y               ],
+                ];
+                for (const [cx, cy] of pxCandidates) {
+                  try {
+                    const cand = map.unproject([cx, cy] as [number, number]);
+                    bLng = cand.lng; bLat = cand.lat; placed = true; nudged = true;
+                    console.log('[zones] badge nudged (edge fallback) at', fallbackDist.toFixed(0), 'px');
+                    break;
+                  } catch { /* skip bad candidate */ }
+                }
+              }
+              if (!placed) console.log('[zones] badge nudge: all candidates failed');
             }
           }
           if (nudged) primaryBadgeMarker.setLngLat([bLng, bLat]);
