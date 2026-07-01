@@ -412,8 +412,8 @@ const BAND: Record<string, BandCopy> = {
   // ── Slope ──
   slope_gentle:    { barSev: 'good',     barText: 'Gentle slope — unlikely to constrain septic placement.' },
   slope_moderate:  { barSev: 'warning',  barText: 'Moderate slope — generally workable; verify field conditions.' },
-  slope_marginal:  { barSev: 'warning',  barText: 'Marginal slope — site-specific design likely needed.',
-                     alertText: 'Marginal slope — site-specific design likely needed', alertLevel: 'warning' },
+  slope_marginal:  { barSev: 'warning',  barText: 'Elevated slope — site-specific design likely needed.',
+                     alertText: 'Elevated slope — site-specific design likely needed', alertLevel: 'warning' },
   slope_steep:     { barSev: 'critical', barText: 'Steep slope — exceeds typical drainfield limits.',
                      alertText: 'Steep slope — alternative design or alternate site required', alertLevel: 'critical' },
   // ── Water table ──
