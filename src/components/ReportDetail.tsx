@@ -2739,6 +2739,7 @@ function MapPanel({ reportId, cachedOverlayGeojson, parcelBoundary, isBboxFallba
         const W_CLEAR = 0.5;
         const W_FLAT = 0.5;
         const ROWS = 8, COLS = 8;
+        const MIN_PIN_SPACING_M = 15;
 
         type ScoredPoint = {
           pt: turf.Feature<turf.Point>;
@@ -3065,7 +3066,20 @@ function MapPanel({ reportId, cachedOverlayGeojson, parcelBoundary, isBboxFallba
               });
             }
 
-            zoneSelected = survivors.slice(0, maxPins).map(sp => ({ ...sp, zonePercMethod: percPinMethod }));
+            // Sequential spacing gate: skip any survivor within MIN_PIN_SPACING_M of
+            // an already-chosen pin in this zone. Zones too small to fit two well-spaced
+            // pins yield fewer pins here; remaining slots fall to the next zone.
+            const spacingPassed: ScoredPoint[] = [];
+            let spacingDiscarded = 0;
+            for (const sp of survivors) {
+              const tooClose = spacingPassed.some(placed =>
+                turf.distance(placed.pt, sp.pt, { units: 'meters' }) < MIN_PIN_SPACING_M
+              );
+              if (tooClose) { spacingDiscarded++; } else { spacingPassed.push(sp); }
+              if (spacingPassed.length >= maxPins) break;
+            }
+            console.log(`[perc-pin] zone: ${zoneLabel} mukey: ${zone.mukey} spacing_filter_discarded: ${spacingDiscarded}`);
+            zoneSelected = spacingPassed.map(sp => ({ ...sp, zonePercMethod: percPinMethod }));
 
             for (let rank = zoneSelected.length + 1; rank <= maxPins; rank++) {
               console.log(`[perc-pin] rank: ${allSelected.length + rank} zone: ${zoneLabel} mukey: ${zone.mukey} suppressed: true reason: no-interior-after-setback`);
