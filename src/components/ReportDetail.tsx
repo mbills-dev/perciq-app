@@ -1513,6 +1513,7 @@ interface MapPanelProps {
   onDemSlopeReady?: (slopes: Record<string, number | null>) => void;
   onAllLayersReady?: () => void;
   onCanvasReady?: (canvas: HTMLCanvasElement) => void;
+  requestCaptureRef?: React.MutableRefObject<(() => Promise<HTMLCanvasElement>) | null>;
   onBestZoneInFlood?: (inFlood: boolean) => void;
   onPercFallback?: (exhausted: boolean) => void;
   onPercPinsReady?: (pins: PercPinData[]) => void;
@@ -1632,7 +1633,7 @@ function fitToBoundary(map: mapboxgl.Map, boundary: Record<string, unknown>) {
   } catch (_) { /* ignore */ }
 }
 
-function MapPanel({ reportId, cachedOverlayGeojson, parcelBoundary, isBboxFallback, boundarySource, soilResults, lat, lng, onMapReady, onCoverageUpdate, onSoilPolygonsReady, onDemSlopeReady, onAllLayersReady, onCanvasReady, onBestZoneInFlood, onPercFallback, onPercPinsReady, onTokenReady, onSoilHover, onSoilClick, activeTab }: MapPanelProps) {
+function MapPanel({ reportId, cachedOverlayGeojson, parcelBoundary, isBboxFallback, boundarySource, soilResults, lat, lng, onMapReady, onCoverageUpdate, onSoilPolygonsReady, onDemSlopeReady, onAllLayersReady, onCanvasReady, requestCaptureRef, onBestZoneInFlood, onPercFallback, onPercPinsReady, onTokenReady, onSoilHover, onSoilClick, activeTab }: MapPanelProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<mapboxgl.Map | null>(null);
   const markerRef = useRef<mapboxgl.Marker | null>(null);
@@ -3654,20 +3655,15 @@ function MapPanel({ reportId, cachedOverlayGeojson, parcelBoundary, isBboxFallba
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Trigger fade-out once all layers ready; also dismiss the still-loading banner
-  useEffect(() => {
-    if (!allReady) return;
-    setStillLoadingBanner(false);
-    setOverlayFading(true);
-    onAllLayersReadyRef.current?.();
+  // Returns a Promise that resolves to the composited map canvas after a fresh
+  // flat north-up fitBounds capture. Safe to call any time after the map is ready.
+  const triggerCapture = useCallback((): Promise<HTMLCanvasElement> => {
+    return new Promise((resolve, reject) => {
+      const map = mapRef.current;
+      if (!map) { reject(new Error('map not ready')); return; }
 
-    const map = mapRef.current;
-
-    function captureComposited() {
-      if (!map) return;
-      // Instant camera reset — jumpTo is non-animated so no race with fitBounds
       map.jumpTo({ pitch: 0, bearing: 0 });
-      // Re-fit to parcel with zero animation so the idle event fires immediately
+
       if (parcelBoundary) {
         try {
           const coords = extractCoords(parcelBoundary);
@@ -3683,7 +3679,6 @@ function MapPanel({ reportId, cachedOverlayGeojson, parcelBoundary, isBboxFallba
 
       map.once('idle', () => {
         const mapCanvas = map.getCanvas();
-        // Composite perc pin circles onto a copy of the map canvas
         const out = document.createElement('canvas');
         out.width = mapCanvas.width;
         out.height = mapCanvas.height;
@@ -3695,7 +3690,7 @@ function MapPanel({ reportId, cachedOverlayGeojson, parcelBoundary, isBboxFallba
         const PIN_TEXT_COLORS = ['#FFFFFF', '#FFFFFF', '#0A0F1E'];
         const PIN_RING = '#FFFFFF';
         const dpr = window.devicePixelRatio || 1;
-        const pinRadius = 16 * dpr; // 32px diameter at 1x — legible at print size
+        const pinRadius = 16 * dpr;
         const ringWidth = 3 * dpr;
         const fontSize = Math.round(13 * dpr);
 
@@ -3732,11 +3727,26 @@ function MapPanel({ reportId, cachedOverlayGeojson, parcelBoundary, isBboxFallba
         });
 
         onCanvasReadyRef.current?.(out);
+        resolve(out);
       });
-    }
+    });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [parcelBoundary]);
+
+  // Expose triggerCapture via requestCaptureRef so the parent can call it on demand
+  useEffect(() => {
+    if (requestCaptureRef) requestCaptureRef.current = triggerCapture;
+  }, [requestCaptureRef, triggerCapture]);
+
+  // Trigger fade-out once all layers ready; also dismiss the still-loading banner
+  useEffect(() => {
+    if (!allReady) return;
+    setStillLoadingBanner(false);
+    setOverlayFading(true);
+    onAllLayersReadyRef.current?.();
 
     // Small delay to ensure layers are painted before we refit + capture
-    const captureTimer = setTimeout(captureComposited, 200);
+    const captureTimer = setTimeout(() => { triggerCapture().catch(() => {}); }, 200);
 
     const id = setTimeout(() => {
       setOverlayGone(true);
@@ -4236,6 +4246,7 @@ export default function ReportDetail({ reportId, onBack, isPublic = false }: Rep
   const boundaryFetchedRef = useRef(false);
   const isFetchingBoundaryRef = useRef(false);
   const parcelComplexRef = useRef(false);
+  const requestCaptureRef = useRef<(() => Promise<HTMLCanvasElement>) | null>(null);
 
   const loadReport = useCallback(async () => {
     const [{ data: rep }, { data: soil }] = await Promise.all([
@@ -4786,6 +4797,8 @@ export default function ReportDetail({ reportId, onBack, isPublic = false }: Rep
       topZones,
       percPins: percPinsRef.current,
       mapImageBase64,
+      mapImageWidth: mapCanvasRef.current?.width ?? null,
+      mapImageHeight: mapCanvasRef.current?.height ?? null,
     };
   }, [envCoverage, mapSoilPolygons, report, parcelScore, zoneScore]);
 
@@ -4794,8 +4807,21 @@ export default function ReportDetail({ reportId, onBack, isPublic = false }: Rep
     if (isGeneratingPdf) return;
     setIsGeneratingPdf(true);
     try {
-      // Use the snapshot captured at onAllLayersReady — the map is fully rendered at that moment
-      const reportData = buildReportData(mapSnapshotRef.current);
+      // Capture a fresh flat north-up snapshot at report-generation time so the
+      // PDF map always reflects the current state, not the stale initial-load snapshot.
+      let freshSnapshot: string | null = mapSnapshotRef.current;
+      if (requestCaptureRef.current) {
+        try {
+          const canvas = await requestCaptureRef.current();
+          freshSnapshot = canvas.toDataURL('image/jpeg', 0.92);
+          mapSnapshotRef.current = freshSnapshot;
+          mapCanvasRef.current = canvas;
+        } catch (e) {
+          console.warn('[report] fresh capture failed, falling back to cached snapshot:', e);
+        }
+      }
+
+      const reportData = buildReportData(freshSnapshot);
       const shareUrl = (() => {
         const u = new URL(window.location.href);
         u.searchParams.set('report', reportId);
@@ -5683,6 +5709,7 @@ export default function ReportDetail({ reportId, onBack, isPublic = false }: Rep
               console.log('[map] all layers ready — overlay dismissed');
               setMapLayersReady(true);
             }}
+            requestCaptureRef={requestCaptureRef}
             onCanvasReady={(canvas) => {
               mapCanvasRef.current = canvas;
               try {

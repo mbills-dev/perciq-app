@@ -54,6 +54,8 @@ export interface ReportData {
   topZones: ZoneData[];
   percPins: PercPinData[];
   mapImageBase64: string | null;
+  mapImageWidth?: number | null;
+  mapImageHeight?: number | null;
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -286,13 +288,21 @@ function buildAssessmentText(data: ReportData): string {
 
 // ── Map slot ──────────────────────────────────────────────────────────────────
 
-function buildMapSlot(base64: string | null, address: string): string {
+function buildMapSlot(base64: string | null, address: string, imgW?: number | null, imgH?: number | null): string {
+  // Adaptive height: clamp between 300px and 480px based on captured image aspect ratio
+  const SLOT_W = 712; // 816px page - 52px*2 side padding
+  let slotH = 300;
+  if (base64 && imgW && imgH && imgW > 0) {
+    slotH = Math.min(480, Math.max(300, Math.round(SLOT_W * imgH / imgW)));
+  }
+  const heightStyle = base64 ? `height:${slotH}px` : 'height:222px';
+
   const imgContent = base64
     ? `<img src="${base64}" style="position:absolute;inset:0;width:100%;height:100%;object-fit:contain;background:#0a0f1e;border-radius:12px" alt="Parcel map" />`
     : `<div class="ms-icon"><svg viewBox="0 0 36 36" fill="none"><rect width="36" height="36" rx="8" fill="#22C55E" fill-opacity="0.3"/><path d="M18 8L28 13V23L18 28L8 23V13L18 8Z" stroke="#16a34a" stroke-width="1.5"/><circle cx="18" cy="18" r="3" fill="#16a34a" fill-opacity="0.7"/></svg></div>
       <div class="ms-lbl">Parcel Map &amp; Soil Zones</div>
       <div class="ms-sub">Map image not available</div>`;
-  return `<div class="map-slot" id="parcel-map-slot">
+  return `<div class="map-slot" id="parcel-map-slot" style="${heightStyle}">
       ${imgContent}
       <div class="map-badge">${address}</div>
     </div>`;
@@ -751,12 +761,12 @@ body{
 .disc-b{font-size:14px;font-weight:400;line-height:1.7;color:var(--slate)}
 
 @media print {
-  body{background:#fff}
-  @page{size:letter portrait;margin:0}
+  @page{size:letter portrait;margin:0.5in}
+  body{background:#fff;-webkit-print-color-adjust:exact;print-color-adjust:exact}
   .page{
     box-shadow:none;
     margin:0;
-    width:816px;
+    width:100%;
     page-break-after:always;
     break-after:page;
   }
@@ -765,8 +775,11 @@ body{
     break-after:auto;
   }
   .cover{
-    height:1056px;
-    overflow:hidden;
+    height:auto;
+    min-height:0;
+    overflow:visible;
+    page-break-after:page;
+    break-after:page;
   }
   .zone-card,
   .risk-card,
@@ -775,18 +788,27 @@ body{
   .disc,
   .data-note,
   .mc,
-  .method-cols{
+  .method-cols,
+  .score-block,
+  .site-card,
+  .cov-scores,
+  .sc-card,
+  .zc-stats,
+  .zc-ins,
+  .zc-factors,
+  .pin-grid,
+  .series-tbl tr{
     page-break-inside:avoid;
     break-inside:avoid;
   }
-  .pg-hdr{
+  .pg-hdr,
+  .pg-sec,
+  .method-lbl,
+  .pg-intro{
     page-break-after:avoid;
     break-after:avoid;
   }
-  .pg-sec{
-    page-break-after:avoid;
-    break-after:avoid;
-  }
+  .pg{min-height:0}
   .dl-bar{display:none!important}
 }
 
@@ -873,7 +895,7 @@ export function generateReportHTML(data: ReportData, meta?: { shareUrl?: string;
   const wetFill = (Math.min(100, data.wetlandPct) / 100) * circumference;
 
   const assessmentText = buildAssessmentText(data);
-  const mapSlotHtml = buildMapSlot(data.mapImageBase64, data.address);
+  const mapSlotHtml = buildMapSlot(data.mapImageBase64, data.address, data.mapImageWidth, data.mapImageHeight);
   const seriesRows = buildSeriesRows(data.soilSeries);
   const zoneCardsHtml = buildZoneCards(data.topZones);
   const pinCardsHtml = buildPinCards(data.percPins);
@@ -1133,7 +1155,6 @@ export function generateReportHTML(data: ReportData, meta?: { shareUrl?: string;
 <script>
 (function() {
   var shareUrl = ${JSON.stringify(publicReportUrl)};
-  var filename = ${JSON.stringify(filename)};
 
   var shareBtn = document.getElementById('share-btn');
   if (shareBtn && shareUrl) {
@@ -1148,176 +1169,9 @@ export function generateReportHTML(data: ReportData, meta?: { shareUrl?: string;
   }
 
   var dlBtn = document.getElementById('dl-btn');
-  var dlLabel = document.getElementById('dl-label');
-  if (dlBtn && dlLabel) {
+  if (dlBtn) {
     dlBtn.addEventListener('click', function() {
-      if (dlBtn.disabled) return;
-      dlBtn.disabled = true;
-      dlLabel.textContent = 'Building PDF\u2026';
-
-      Promise.all([
-        loadScript('https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js'),
-        loadScript('https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js')
-      ]).then(async function() {
-        var pdfW = 816, pdfH = 1056;
-        var SCALE = 2;
-        var PAD_H = 52; // .pg-body horizontal padding (matches CSS padding:20px 52px)
-        var jsPDFLib = window.jspdf || window.jsPDF;
-        var pdf = new jsPDFLib.jsPDF({ unit: 'px', format: [pdfW, pdfH], orientation: 'portrait' });
-        var isFirstPage = true;
-
-        // ── Overlay: covers the entire viewport so the user never sees the render host ──
-        var overlay = document.createElement('div');
-        overlay.setAttribute('data-pdf-overlay', '1');
-        overlay.style.cssText = 'position:fixed;inset:0;z-index:99999;background:#0a0f1e;' +
-          'display:flex;align-items:center;justify-content:center;flex-direction:column;gap:16px;';
-        overlay.innerHTML = '<div style="color:#fff;font-size:18px;font-weight:600;font-family:sans-serif">Generating PDF\u2026</div>' +
-          '<div style="color:rgba(255,255,255,0.4);font-size:14px;font-family:sans-serif">This may take a few seconds</div>';
-        document.body.appendChild(overlay);
-
-        // ── Render host: at viewport origin (top:0;left:0) so html2canvas pixel coords are exact ──
-        // The overlay above hides it from the user. Do NOT use negative offsets or opacity:0.
-        var host = document.createElement('div');
-        host.setAttribute('data-pdf-host', '1');
-        host.style.cssText = 'position:fixed;top:0;left:0;width:' + pdfW + 'px;overflow:visible;z-index:99998;background:#fff;';
-        document.body.appendChild(host);
-
-        var sections = Array.from(document.querySelectorAll('.cover, .pg'));
-
-        for (var pi = 0; pi < sections.length; pi++) {
-          var section = sections[pi];
-
-          // ── Clone into host with min-height stripped ──
-          var clone = section.cloneNode(true);
-          clone.style.cssText += ';min-height:0!important;width:' + pdfW + 'px;margin:0;box-shadow:none;';
-          host.innerHTML = '';
-          host.appendChild(clone);
-
-          // Force a layout pass
-          void clone.offsetHeight;
-
-          // ── Measure using offsetTop/offsetHeight (layout-relative, immune to viewport position) ──
-          var bodyEl = clone.querySelector('.pg-body');
-          var headerEl = clone.querySelector('.pg-hdr');
-          var ruleEl = clone.querySelector('.pg-rule');
-          var footerEl = clone.querySelector('.pg-foot');
-
-          // offsetHeight on the clone gives us the natural rendered height
-          var naturalH = clone.offsetHeight;
-
-          // If there is no body (e.g. cover page) or it fits on one page, emit as-is
-          var blocks = bodyEl ? Array.from(bodyEl.children) : [];
-          var headerH = headerEl ? headerEl.offsetHeight : 0;
-          var ruleH = ruleEl ? ruleEl.offsetHeight : 0;
-          var footerH = footerEl ? footerEl.offsetHeight : 0;
-          var fixedH = headerH + ruleH; // height consumed by header+rule at the top of every page
-
-          // ── Build page bins: each bin is a list of block elements to render together ──
-          // We physically move each bin into its own page container and render it separately,
-          // so there is no tall-canvas slicing and no drawImage offset arithmetic.
-          var pageBins = [[]]; // array of arrays of block elements
-
-          if (blocks.length === 0 || naturalH <= pdfH) {
-            // Single-page section — no binning needed; bin is empty (we render the whole clone)
-            pageBins = [null];
-          } else {
-            var cursor = fixedH;
-            var currentBin = [];
-            pageBins = [currentBin];
-
-            for (var bi = 0; bi < blocks.length; bi++) {
-              var block = blocks[bi];
-              var blockH = block.offsetHeight;
-
-              if (currentBin.length > 0 && cursor + blockH > pdfH - footerH) {
-                // Block doesn't fit — start a new bin
-                currentBin = [block];
-                pageBins.push(currentBin);
-                cursor = fixedH + blockH;
-              } else {
-                currentBin.push(block);
-                cursor += blockH;
-              }
-            }
-          }
-
-          // ── Render each bin as its own page ──
-          for (var si = 0; si < pageBins.length; si++) {
-            var binBlocks = pageBins[si];
-            var pageContainer;
-
-            if (binBlocks === null) {
-              // Whole-section single page: render the clone directly
-              pageContainer = clone;
-            } else {
-              // Build a minimal page container holding only this bin's blocks
-              pageContainer = document.createElement('div');
-              pageContainer.style.cssText = 'width:' + pdfW + 'px;background:#fff;overflow:visible;';
-
-              // Always include the section header + rule on every page
-              if (headerEl) pageContainer.appendChild(headerEl.cloneNode(true));
-              if (ruleEl) pageContainer.appendChild(ruleEl.cloneNode(true));
-
-              // Body wrapper matching the original .pg-body padding
-              var bodyWrap = document.createElement('div');
-              bodyWrap.style.cssText = 'padding:20px ' + PAD_H + 'px;overflow:visible;';
-              for (var bk = 0; bk < binBlocks.length; bk++) {
-                bodyWrap.appendChild(binBlocks[bk].cloneNode(true));
-              }
-              pageContainer.appendChild(bodyWrap);
-
-              // Footer only on last bin
-              if (si === pageBins.length - 1 && footerEl) {
-                pageContainer.appendChild(footerEl.cloneNode(true));
-              }
-            }
-
-            host.innerHTML = '';
-            host.appendChild(pageContainer);
-            void pageContainer.offsetHeight;
-
-            var pageH = pageContainer.offsetHeight;
-
-            var pageCanvas = await html2canvas(pageContainer, {
-              scale: SCALE,
-              useCORS: true,
-              allowTaint: true,
-              backgroundColor: '#ffffff'
-            });
-
-            if (!isFirstPage) pdf.addPage([pdfW, pageH]);
-            isFirstPage = false;
-            pdf.addImage(pageCanvas.toDataURL('image/jpeg', 0.95), 'JPEG', 0, 0, pdfW, pageH);
-          }
-        }
-
-        document.body.removeChild(host);
-        document.body.removeChild(overlay);
-
-        var slug = filename.replace(/^PercIQ-/, '').replace(/\.pdf$/, '');
-        pdf.save('PercIQ-' + slug + '.pdf');
-        dlLabel.textContent = 'Save as PDF';
-        dlBtn.disabled = false;
-      }).catch(function(err) {
-        var ol = document.querySelector('[data-pdf-overlay]');
-        if (ol && ol.parentNode) ol.parentNode.removeChild(ol);
-        var ho = document.querySelector('[data-pdf-host]');
-        if (ho && ho.parentNode) ho.parentNode.removeChild(ho);
-        console.error('PDF generation failed', err);
-        dlLabel.textContent = 'Save as PDF';
-        dlBtn.disabled = false;
-      });
-    });
-  }
-
-  function loadScript(src) {
-    return new Promise(function(resolve, reject) {
-      if (document.querySelector('script[src="' + src + '"]')) { resolve(); return; }
-      var s = document.createElement('script');
-      s.src = src;
-      s.onload = resolve;
-      s.onerror = reject;
-      document.head.appendChild(s);
+      window.print();
     });
   }
 })();
