@@ -686,7 +686,7 @@ body{
 }
 .map-slot img{
   position:absolute;inset:0;width:100%;height:100%;
-  object-fit:cover;border-radius:calc(var(--r) - 2px);
+  object-fit:contain;background:#0a0f1e;border-radius:calc(var(--r) - 2px);
 }
 .ms-icon{width:36px;height:36px;opacity:0.35}
 .ms-icon svg{width:36px;height:36px}
@@ -1160,47 +1160,53 @@ export function generateReportHTML(data: ReportData, meta?: { shareUrl?: string;
         loadScript('https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js')
       ]).then(async function() {
         var pdfW = 816, pdfH = 1056;
+        var SCALE = 2;
         var jsPDFLib = window.jspdf || window.jsPDF;
         var pdf = new jsPDFLib.jsPDF({ unit: 'px', format: [pdfW, pdfH], orientation: 'portrait' });
         var isFirstPage = true;
         var sections = Array.from(document.querySelectorAll('.cover, .pg'));
 
-        // Strip min-height from .pg elements so natural content height drives measurements
-        var pgEls = Array.from(document.querySelectorAll('.pg'));
-        var savedMinHeights = pgEls.map(function(el) { return el.style.minHeight; });
-        pgEls.forEach(function(el) { el.style.minHeight = '0'; });
+        // Offscreen host: a fixed-width container positioned off-screen so html2canvas
+        // always sees exactly 816px regardless of the browser window width. No responsive
+        // breakpoints fire at this position and width.
+        var host = document.createElement('div');
+        host.style.cssText = 'position:fixed;top:0;left:-9999px;width:' + pdfW + 'px;' +
+          'overflow:visible;z-index:-1;background:#fff;';
+        document.body.appendChild(host);
 
         for (var pi = 0; pi < sections.length; pi++) {
           var section = sections[pi];
-          var naturalH = Math.ceil(section.getBoundingClientRect().height);
+
+          // Clone into offscreen host with min-height stripped
+          var clone = section.cloneNode(true);
+          clone.style.minHeight = '0';
+          clone.style.width = pdfW + 'px';
+          clone.style.margin = '0';
+          clone.style.boxShadow = 'none';
+          host.innerHTML = '';
+          host.appendChild(clone);
+
+          var naturalH = Math.ceil(clone.getBoundingClientRect().height);
 
           // Collect discrete blocks for element-aware page binning.
-          // Use direct children of .pg-body; fall back to the whole section.
-          var bodyEl = section.querySelector('.pg-body');
-          var blocks = bodyEl
-            ? Array.from(bodyEl.children)
-            : [section];
+          var bodyEl = clone.querySelector('.pg-body');
+          var blocks = bodyEl ? Array.from(bodyEl.children) : [];
 
-          // Greedy-bin blocks into pages. Each bin is a slice of the full section canvas.
-          // We accumulate blocks until adding the next would exceed pdfH, then start a new bin.
-          // Each bin records {startY, endY} relative to the section top.
-          var sectionTop = section.getBoundingClientRect().top;
-          var headerEl = section.querySelector('.pg-hdr');
-          var ruleEl = section.querySelector('.pg-rule');
-          var footerEl = section.querySelector('.pg-foot');
+          var sectionTop = clone.getBoundingClientRect().top;
+          var headerEl = clone.querySelector('.pg-hdr');
+          var ruleEl = clone.querySelector('.pg-rule');
+          var footerEl = clone.querySelector('.pg-foot');
           var headerH = headerEl ? Math.ceil(headerEl.getBoundingClientRect().height) : 0;
           var ruleH = ruleEl ? Math.ceil(ruleEl.getBoundingClientRect().height) : 0;
           var footerH = footerEl ? Math.ceil(footerEl.getBoundingClientRect().height) : 0;
-          var fixedH = headerH + ruleH; // repeated at top of each page slice
+          var fixedH = headerH + ruleH;
 
           var bins = [];
           if (blocks.length === 0 || naturalH <= pdfH) {
-            // Single page: no binning needed
             bins.push({ startY: 0, endY: naturalH });
           } else {
-            var cursor = fixedH; // start after the header
+            var cursor = fixedH;
             var binStart = 0;
-            var availH = pdfH - fixedH - footerH;
 
             for (var bi = 0; bi < blocks.length; bi++) {
               var block = blocks[bi];
@@ -1209,7 +1215,6 @@ export function generateReportHTML(data: ReportData, meta?: { shareUrl?: string;
               var blockH = Math.ceil(blockRect.height);
 
               if (bi > 0 && cursor + blockH > pdfH - footerH && cursor > fixedH) {
-                // This block doesn't fit — close current bin, start new one
                 bins.push({ startY: binStart, endY: blockTop });
                 binStart = blockTop;
                 cursor = fixedH + blockH;
@@ -1217,23 +1222,20 @@ export function generateReportHTML(data: ReportData, meta?: { shareUrl?: string;
                 cursor += blockH;
               }
             }
-            // Close final bin
             bins.push({ startY: binStart, endY: naturalH });
           }
 
-          // Render full section at natural height (no artificial padding)
           var captureH = naturalH;
           if (bins.length > 1) {
-            // Pad to a multiple of pdfH so slice arithmetic works cleanly
             var rem = captureH % pdfH;
             if (rem > 0) {
               captureH = captureH + (pdfH - rem);
-              section.style.paddingBottom = (captureH - naturalH) + 'px';
+              clone.style.paddingBottom = (captureH - naturalH) + 'px';
             }
           }
 
-          var sectionCanvas = await html2canvas(section, {
-            scale: 2,
+          var sectionCanvas = await html2canvas(clone, {
+            scale: SCALE,
             width: pdfW,
             height: captureH,
             useCORS: true,
@@ -1242,18 +1244,16 @@ export function generateReportHTML(data: ReportData, meta?: { shareUrl?: string;
           });
 
           if (bins.length === 1) {
-            // Single page — size the PDF page to content height (no blank space)
             var pageH = naturalH;
             if (!isFirstPage) pdf.addPage([pdfW, pageH]);
             isFirstPage = false;
             var sc = document.createElement('canvas');
-            sc.width = pdfW * 2; sc.height = pageH * 2;
+            sc.width = pdfW * SCALE; sc.height = pageH * SCALE;
             var ctx = sc.getContext('2d');
             ctx.fillStyle = '#ffffff'; ctx.fillRect(0, 0, sc.width, sc.height);
             ctx.drawImage(sectionCanvas, 0, 0);
             pdf.addImage(sc.toDataURL('image/jpeg', 0.95), 'JPEG', 0, 0, pdfW, pageH);
           } else {
-            // Multi-page: emit one PDF page per bin
             for (var si = 0; si < bins.length; si++) {
               var bin = bins[si];
               var sliceH = bin.endY - bin.startY;
@@ -1261,19 +1261,16 @@ export function generateReportHTML(data: ReportData, meta?: { shareUrl?: string;
               if (!isFirstPage) pdf.addPage([pdfW, pageH2]);
               isFirstPage = false;
               var sc2 = document.createElement('canvas');
-              sc2.width = pdfW * 2; sc2.height = pageH2 * 2;
+              sc2.width = pdfW * SCALE; sc2.height = pageH2 * SCALE;
               var ctx2 = sc2.getContext('2d');
               ctx2.fillStyle = '#ffffff'; ctx2.fillRect(0, 0, sc2.width, sc2.height);
-              ctx2.drawImage(sectionCanvas, 0, -(bin.startY * 2));
+              ctx2.drawImage(sectionCanvas, 0, -(bin.startY * SCALE));
               pdf.addImage(sc2.toDataURL('image/jpeg', 0.95), 'JPEG', 0, 0, pdfW, pageH2);
             }
           }
-
-          if (bins.length > 1) section.style.paddingBottom = '';
         }
 
-        // Restore min-heights
-        pgEls.forEach(function(el, i) { el.style.minHeight = savedMinHeights[i]; });
+        document.body.removeChild(host);
 
         var slug = filename.replace(/^PercIQ-/, '').replace(/\.pdf$/, '');
         pdf.save('PercIQ-' + slug + '.pdf');

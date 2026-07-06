@@ -3665,6 +3665,9 @@ function MapPanel({ reportId, cachedOverlayGeojson, parcelBoundary, isBboxFallba
 
     function captureComposited() {
       if (!map) return;
+      // Force flat north-up orientation before capture
+      map.setPitch(0);
+      map.setBearing(0);
       // Re-fit to parcel with zero animation so the idle event fires immediately
       if (parcelBoundary) {
         try {
@@ -3674,7 +3677,7 @@ function MapPanel({ reportId, cachedOverlayGeojson, parcelBoundary, isBboxFallba
               (b, c) => b.extend(c as [number, number]),
               new mapboxgl.LngLatBounds(coords[0] as [number, number], coords[0] as [number, number])
             );
-            map.fitBounds(bounds, { padding: 40, maxZoom: 18, duration: 0 });
+            map.fitBounds(bounds, { padding: 48, maxZoom: 18, duration: 0 });
           }
         } catch { /* ignore */ }
       }
@@ -3688,23 +3691,27 @@ function MapPanel({ reportId, cachedOverlayGeojson, parcelBoundary, isBboxFallba
         const ctx = out.getContext('2d')!;
         ctx.drawImage(mapCanvas, 0, 0);
 
-        const PIN_COLORS = ['#FFFFFF', '#334155', '#94A3B8'];
-        const PIN_BORDER = '#0A0F1E';
+        // Pin styling: rank 1 dark fill + white text, rank 2 slate + white text, rank 3 light slate + dark text
+        const PIN_FILLS = ['#0A0F1E', '#334155', '#94A3B8'];
+        const PIN_TEXT_COLORS = ['#FFFFFF', '#FFFFFF', '#0A0F1E'];
+        const PIN_RING = '#FFFFFF';
         const dpr = window.devicePixelRatio || 1;
-        const pinRadius = 11 * dpr;
-        const fontSize = Math.round(10 * dpr);
+        const pinRadius = 16 * dpr; // 32px diameter at 1x — legible at print size
+        const ringWidth = 3 * dpr;
+        const fontSize = Math.round(13 * dpr);
 
         percMarkersRef.current.forEach((marker, idx) => {
           const lngLat = marker.getLngLat();
           const pt = map.project(lngLat);
           const px = pt.x * dpr;
           const py = pt.y * dpr;
-          const fill = PIN_COLORS[idx] ?? '#FFFFFF';
+          const fill = PIN_FILLS[idx] ?? '#0A0F1E';
+          const textColor = PIN_TEXT_COLORS[idx] ?? '#FFFFFF';
 
           ctx.save();
-          ctx.shadowColor = 'rgba(0,0,0,0.5)';
-          ctx.shadowBlur = 4 * dpr;
-          ctx.shadowOffsetY = 2 * dpr;
+          ctx.shadowColor = 'rgba(0,0,0,0.55)';
+          ctx.shadowBlur = 6 * dpr;
+          ctx.shadowOffsetY = 3 * dpr;
           ctx.beginPath();
           ctx.arc(px, py, pinRadius, 0, Math.PI * 2);
           ctx.fillStyle = fill;
@@ -3712,10 +3719,12 @@ function MapPanel({ reportId, cachedOverlayGeojson, parcelBoundary, isBboxFallba
           ctx.shadowColor = 'transparent';
           ctx.shadowBlur = 0;
           ctx.shadowOffsetY = 0;
-          ctx.lineWidth = 2.5 * dpr;
-          ctx.strokeStyle = PIN_BORDER;
+          ctx.beginPath();
+          ctx.arc(px, py, pinRadius, 0, Math.PI * 2);
+          ctx.lineWidth = ringWidth;
+          ctx.strokeStyle = PIN_RING;
           ctx.stroke();
-          ctx.fillStyle = PIN_BORDER;
+          ctx.fillStyle = textColor;
           ctx.font = `bold ${fontSize}px Arial,sans-serif`;
           ctx.textAlign = 'center';
           ctx.textBaseline = 'middle';
