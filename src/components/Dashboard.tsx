@@ -713,8 +713,10 @@ export default function Dashboard({ onViewReport, onCreateReport, onNavigateSett
   const [bulkDeleteError, setBulkDeleteError] = useState<string | null>(null);
   const [bulkDeleting, setBulkDeleting] = useState(false);
   const [showLimitModal, setShowLimitModal] = useState(false);
+  const [showTrialLimitModal, setShowTrialLimitModal] = useState(false);
   const [userPlan, setUserPlan] = useState<PlanTier>('free');
   const [analysesUsed, setAnalysesUsed] = useState(0);
+  const [planRenewalDate, setPlanRenewalDate] = useState<string | null>(null);
 
   const supabaseUrl = import.meta.env.VITE_SUPABASE_URL as string;
   const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY as string;
@@ -753,12 +755,13 @@ export default function Dashboard({ onViewReport, onCreateReport, onNavigateSett
   async function loadUsage() {
     const { data } = await supabase
       .from('user_profiles')
-      .select('plan, subscription_status, monthly_analyses_used')
+      .select('plan, subscription_status, monthly_analyses_used, plan_renewal_date')
       .maybeSingle();
     if (data) {
       const plan = (data.plan ?? 'free') as PlanTier;
       setUserPlan(plan);
       setAnalysesUsed(data.monthly_analyses_used ?? 0);
+      setPlanRenewalDate(data.plan_renewal_date ?? null);
     }
   }
 
@@ -781,7 +784,12 @@ export default function Dashboard({ onViewReport, onCreateReport, onNavigateSett
       body: JSON.stringify({}),
     });
     if (resp.status === 403) {
-      setShowLimitModal(true);
+      const body = await resp.json() as { reason?: string };
+      if (body.reason === 'trial_limit') {
+        setShowTrialLimitModal(true);
+      } else {
+        setShowLimitModal(true);
+      }
       return;
     }
     if (resp.ok) {
@@ -1347,6 +1355,53 @@ export default function Dashboard({ onViewReport, onCreateReport, onNavigateSett
               >
                 <Zap style={{ width: 14, height: 14 }} />
                 Upgrade Plan
+                <ArrowRight style={{ width: 14, height: 14 }} />
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Trial analysis limit modal */}
+      {showTrialLimitModal && (
+        <div
+          style={{
+            position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.65)', backdropFilter: 'blur(6px)',
+            display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000, padding: 20,
+          }}
+          onClick={() => setShowTrialLimitModal(false)}
+        >
+          <div
+            style={{
+              background: 'rgb(13,17,26)', border: '1px solid rgba(255,255,255,0.10)', borderRadius: 16,
+              padding: 32, maxWidth: 440, width: '100%', textAlign: 'center',
+            }}
+            onClick={e => e.stopPropagation()}
+          >
+            <div style={{ width: 52, height: 52, borderRadius: 14, background: 'rgba(34,197,94,0.12)', border: '1px solid rgba(34,197,94,0.30)', display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 18px' }}>
+              <Zap style={{ width: 22, height: 22, color: '#22C55E' }} />
+            </div>
+            <h3 style={{ fontSize: 18, fontWeight: 700, color: '#fff', marginBottom: 8 }}>
+              Trial analysis limit reached
+            </h3>
+            <p style={{ fontSize: 14, color: 'rgba(255,255,255,0.45)', lineHeight: 1.6, marginBottom: 24 }}>
+              {planRenewalDate
+                ? `You've used all 3 trial analyses. Your full plan unlocks when your trial converts on ${new Date(planRenewalDate).toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' })} — or upgrade now to start immediately.`
+                : `You've used all 3 trial analyses. Upgrade now to unlock your full plan immediately.`}
+            </p>
+            <div style={{ display: 'flex', gap: 10 }}>
+              <button
+                onClick={() => setShowTrialLimitModal(false)}
+                style={{ flex: 1, padding: '10px 0', borderRadius: 10, background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(255,255,255,0.10)', color: 'rgba(255,255,255,0.55)', fontSize: 13, fontWeight: 600, cursor: 'pointer' }}
+              >
+                Cancel
+              </button>
+              <button
+                onClick={() => { setShowTrialLimitModal(false); onNavigateSettings?.(); }}
+                style={{ flex: 2, padding: '10px 0', borderRadius: 10, background: '#22C55E', border: 'none', color: '#000', fontSize: 13, fontWeight: 700, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6 }}
+              >
+                <Zap style={{ width: 14, height: 14 }} />
+                Upgrade Now
                 <ArrowRight style={{ width: 14, height: 14 }} />
               </button>
             </div>

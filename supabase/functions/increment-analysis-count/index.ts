@@ -14,6 +14,7 @@ const PLAN_LIMITS: Record<string, number | null> = {
   unlimited: null,
 };
 
+const TRIAL_ANALYSIS_LIMIT = 3;
 const PERIOD_DAYS = 30;
 
 Deno.serve(async (req: Request) => {
@@ -69,8 +70,8 @@ Deno.serve(async (req: Request) => {
       });
     }
 
+    const isTrial = status === "trialing";
     const plan = (profile.plan ?? "free") as string;
-    const limit = PLAN_LIMITS[plan] ?? null;
     const now = new Date();
 
     // Lazily reset counter if usage_period_start is null or more than 30 days old
@@ -83,9 +84,12 @@ Deno.serve(async (req: Request) => {
     let currentUsed = needsReset ? 0 : (profile.monthly_analyses_used ?? 0) as number;
     const newPeriodStart = needsReset ? now.toISOString() : (profile.usage_period_start as string | null);
 
-    // Enforce limit after reset
+    // Choose the applicable limit: trial cap overrides plan limit while trialing
+    const limit = isTrial ? TRIAL_ANALYSIS_LIMIT : (PLAN_LIMITS[plan] ?? null);
+
     if (limit !== null && currentUsed >= limit) {
-      return new Response(JSON.stringify({ error: "Monthly analysis limit reached" }), {
+      const reason = isTrial ? "trial_limit" : "plan_limit";
+      return new Response(JSON.stringify({ error: "Analysis limit reached", reason }), {
         status: 403,
         headers: { ...corsHeaders, "Content-Type": "application/json" },
       });

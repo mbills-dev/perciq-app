@@ -155,6 +155,7 @@ Deno.serve(async (req: Request) => {
 
     if (event.type === "customer.subscription.updated") {
       const subscription = event.data.object as Stripe.Subscription;
+      const previousAttributes = (event.data as Stripe.Event.Data).previous_attributes as Record<string, unknown> | undefined;
       const customerId = subscription.customer as string;
       const userId = subscription.metadata?.supabase_user_id ?? null;
       const priceId = subscription.items.data[0]?.price.id ?? null;
@@ -163,11 +164,19 @@ Deno.serve(async (req: Request) => {
 
       console.log(`customer.subscription.updated: customer=${customerId} userId=${userId} priceId=${priceId} plan=${plan} status=${subscription.status}`);
 
-      const fields = {
+      const fields: Record<string, unknown> = {
         plan,
         subscription_status: subscription.status,
         plan_renewal_date: renewalDate,
       };
+
+      // Reset usage counter when trial converts to active so full plan limit is immediately available
+      const previousStatus = previousAttributes?.status as string | undefined;
+      if (previousStatus === "trialing" && subscription.status === "active") {
+        console.log(`Trial converted to active for customer=${customerId} — resetting usage counter`);
+        fields.monthly_analyses_used = 0;
+        fields.usage_period_start = new Date().toISOString();
+      }
 
       if (userId) {
         await updateProfileByUserId(supabase, userId, fields);

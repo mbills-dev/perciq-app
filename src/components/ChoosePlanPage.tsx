@@ -122,7 +122,7 @@ export default function ChoosePlanPage({ userEmail }: Props) {
 
           {/* Footer note */}
           <p className="text-xs text-white/25 text-center mt-6 leading-relaxed">
-            7-day free trial on all plans. Card required. Cancel before day 7 and you won't be charged.{' '}
+            7-day free trial · 3 parcel analyses included · Card required · Cancel before day 7 and you won't be charged.{' '}
             Have a beta code? Enter it at checkout.
           </p>
 
