@@ -11,12 +11,14 @@
     "typecheck": "tsc --noEmit -p tsconfig.app.json"
   },
   "dependencies": {
+    "@sparticuz/chromium-min": "^149.0.0",
     "@supabase/supabase-js": "^2.57.4",
     "@turf/turf": "^7.3.5",
     "html2canvas": "^1.4.1",
     "jspdf": "^4.2.1",
     "lucide-react": "^0.344.0",
     "polylabel": "^2.0.1",
+    "puppeteer-core": "^25.3.0",
     "react": "^18.3.1",
     "react-dom": "^18.3.1"
   },
@@ -25,6 +27,7 @@
     "@types/mapbox-gl": "^3.4.1",
     "@types/react": "^18.3.5",
     "@types/react-dom": "^18.3.0",
+    "@vercel/node": "^5.8.22",
     "@vitejs/plugin-react": "^4.3.1",
     "autoprefixer": "^10.4.18",
     "eslint": "^9.9.1",
