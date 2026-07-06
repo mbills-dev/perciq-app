@@ -288,7 +288,7 @@ function buildAssessmentText(data: ReportData): string {
 
 function buildMapSlot(base64: string | null, address: string): string {
   const imgContent = base64
-    ? `<img src="${base64}" style="position:absolute;inset:0;width:100%;height:100%;object-fit:cover;border-radius:12px" alt="Parcel map" />`
+    ? `<img src="${base64}" style="position:absolute;inset:0;width:100%;height:100%;object-fit:contain;background:#0a0f1e;border-radius:12px" alt="Parcel map" />`
     : `<div class="ms-icon"><svg viewBox="0 0 36 36" fill="none"><rect width="36" height="36" rx="8" fill="#22C55E" fill-opacity="0.3"/><path d="M18 8L28 13V23L18 28L8 23V13L18 8Z" stroke="#16a34a" stroke-width="1.5"/><circle cx="18" cy="18" r="3" fill="#16a34a" fill-opacity="0.7"/></svg></div>
       <div class="ms-lbl">Parcel Map &amp; Soil Zones</div>
       <div class="ms-sub">Map image not available</div>`;
@@ -1161,122 +1161,148 @@ export function generateReportHTML(data: ReportData, meta?: { shareUrl?: string;
       ]).then(async function() {
         var pdfW = 816, pdfH = 1056;
         var SCALE = 2;
+        var PAD_H = 52; // .pg-body horizontal padding (matches CSS padding:20px 52px)
         var jsPDFLib = window.jspdf || window.jsPDF;
         var pdf = new jsPDFLib.jsPDF({ unit: 'px', format: [pdfW, pdfH], orientation: 'portrait' });
         var isFirstPage = true;
-        var sections = Array.from(document.querySelectorAll('.cover, .pg'));
 
-        // Offscreen host: a fixed-width container positioned off-screen so html2canvas
-        // always sees exactly 816px regardless of the browser window width. No responsive
-        // breakpoints fire at this position and width.
+        // ── Overlay: covers the entire viewport so the user never sees the render host ──
+        var overlay = document.createElement('div');
+        overlay.setAttribute('data-pdf-overlay', '1');
+        overlay.style.cssText = 'position:fixed;inset:0;z-index:99999;background:#0a0f1e;' +
+          'display:flex;align-items:center;justify-content:center;flex-direction:column;gap:16px;';
+        overlay.innerHTML = '<div style="color:#fff;font-size:18px;font-weight:600;font-family:sans-serif">Generating PDF\u2026</div>' +
+          '<div style="color:rgba(255,255,255,0.4);font-size:14px;font-family:sans-serif">This may take a few seconds</div>';
+        document.body.appendChild(overlay);
+
+        // ── Render host: at viewport origin (top:0;left:0) so html2canvas pixel coords are exact ──
+        // The overlay above hides it from the user. Do NOT use negative offsets or opacity:0.
         var host = document.createElement('div');
-        host.style.cssText = 'position:fixed;top:0;left:-9999px;width:' + pdfW + 'px;' +
-          'overflow:visible;z-index:-1;background:#fff;';
+        host.setAttribute('data-pdf-host', '1');
+        host.style.cssText = 'position:fixed;top:0;left:0;width:' + pdfW + 'px;overflow:visible;z-index:99998;background:#fff;';
         document.body.appendChild(host);
+
+        var sections = Array.from(document.querySelectorAll('.cover, .pg'));
 
         for (var pi = 0; pi < sections.length; pi++) {
           var section = sections[pi];
 
-          // Clone into offscreen host with min-height stripped
+          // ── Clone into host with min-height stripped ──
           var clone = section.cloneNode(true);
-          clone.style.minHeight = '0';
-          clone.style.width = pdfW + 'px';
-          clone.style.margin = '0';
-          clone.style.boxShadow = 'none';
+          clone.style.cssText += ';min-height:0!important;width:' + pdfW + 'px;margin:0;box-shadow:none;';
           host.innerHTML = '';
           host.appendChild(clone);
 
-          var naturalH = Math.ceil(clone.getBoundingClientRect().height);
+          // Force a layout pass
+          void clone.offsetHeight;
 
-          // Collect discrete blocks for element-aware page binning.
+          // ── Measure using offsetTop/offsetHeight (layout-relative, immune to viewport position) ──
           var bodyEl = clone.querySelector('.pg-body');
-          var blocks = bodyEl ? Array.from(bodyEl.children) : [];
-
-          var sectionTop = clone.getBoundingClientRect().top;
           var headerEl = clone.querySelector('.pg-hdr');
           var ruleEl = clone.querySelector('.pg-rule');
           var footerEl = clone.querySelector('.pg-foot');
-          var headerH = headerEl ? Math.ceil(headerEl.getBoundingClientRect().height) : 0;
-          var ruleH = ruleEl ? Math.ceil(ruleEl.getBoundingClientRect().height) : 0;
-          var footerH = footerEl ? Math.ceil(footerEl.getBoundingClientRect().height) : 0;
-          var fixedH = headerH + ruleH;
 
-          var bins = [];
+          // offsetHeight on the clone gives us the natural rendered height
+          var naturalH = clone.offsetHeight;
+
+          // If there is no body (e.g. cover page) or it fits on one page, emit as-is
+          var blocks = bodyEl ? Array.from(bodyEl.children) : [];
+          var headerH = headerEl ? headerEl.offsetHeight : 0;
+          var ruleH = ruleEl ? ruleEl.offsetHeight : 0;
+          var footerH = footerEl ? footerEl.offsetHeight : 0;
+          var fixedH = headerH + ruleH; // height consumed by header+rule at the top of every page
+
+          // ── Build page bins: each bin is a list of block elements to render together ──
+          // We physically move each bin into its own page container and render it separately,
+          // so there is no tall-canvas slicing and no drawImage offset arithmetic.
+          var pageBins = [[]]; // array of arrays of block elements
+
           if (blocks.length === 0 || naturalH <= pdfH) {
-            bins.push({ startY: 0, endY: naturalH });
+            // Single-page section — no binning needed; bin is empty (we render the whole clone)
+            pageBins = [null];
           } else {
             var cursor = fixedH;
-            var binStart = 0;
+            var currentBin = [];
+            pageBins = [currentBin];
 
             for (var bi = 0; bi < blocks.length; bi++) {
               var block = blocks[bi];
-              var blockRect = block.getBoundingClientRect();
-              var blockTop = Math.round(blockRect.top - sectionTop);
-              var blockH = Math.ceil(blockRect.height);
+              var blockH = block.offsetHeight;
 
-              if (bi > 0 && cursor + blockH > pdfH - footerH && cursor > fixedH) {
-                bins.push({ startY: binStart, endY: blockTop });
-                binStart = blockTop;
+              if (currentBin.length > 0 && cursor + blockH > pdfH - footerH) {
+                // Block doesn't fit — start a new bin
+                currentBin = [block];
+                pageBins.push(currentBin);
                 cursor = fixedH + blockH;
               } else {
+                currentBin.push(block);
                 cursor += blockH;
               }
             }
-            bins.push({ startY: binStart, endY: naturalH });
           }
 
-          var captureH = naturalH;
-          if (bins.length > 1) {
-            var rem = captureH % pdfH;
-            if (rem > 0) {
-              captureH = captureH + (pdfH - rem);
-              clone.style.paddingBottom = (captureH - naturalH) + 'px';
+          // ── Render each bin as its own page ──
+          for (var si = 0; si < pageBins.length; si++) {
+            var binBlocks = pageBins[si];
+            var pageContainer;
+
+            if (binBlocks === null) {
+              // Whole-section single page: render the clone directly
+              pageContainer = clone;
+            } else {
+              // Build a minimal page container holding only this bin's blocks
+              pageContainer = document.createElement('div');
+              pageContainer.style.cssText = 'width:' + pdfW + 'px;background:#fff;overflow:visible;';
+
+              // Always include the section header + rule on every page
+              if (headerEl) pageContainer.appendChild(headerEl.cloneNode(true));
+              if (ruleEl) pageContainer.appendChild(ruleEl.cloneNode(true));
+
+              // Body wrapper matching the original .pg-body padding
+              var bodyWrap = document.createElement('div');
+              bodyWrap.style.cssText = 'padding:20px ' + PAD_H + 'px;overflow:visible;';
+              for (var bk = 0; bk < binBlocks.length; bk++) {
+                bodyWrap.appendChild(binBlocks[bk].cloneNode(true));
+              }
+              pageContainer.appendChild(bodyWrap);
+
+              // Footer only on last bin
+              if (si === pageBins.length - 1 && footerEl) {
+                pageContainer.appendChild(footerEl.cloneNode(true));
+              }
             }
-          }
 
-          var sectionCanvas = await html2canvas(clone, {
-            scale: SCALE,
-            width: pdfW,
-            height: captureH,
-            useCORS: true,
-            allowTaint: true,
-            backgroundColor: '#ffffff'
-          });
+            host.innerHTML = '';
+            host.appendChild(pageContainer);
+            void pageContainer.offsetHeight;
 
-          if (bins.length === 1) {
-            var pageH = naturalH;
+            var pageH = pageContainer.offsetHeight;
+
+            var pageCanvas = await html2canvas(pageContainer, {
+              scale: SCALE,
+              useCORS: true,
+              allowTaint: true,
+              backgroundColor: '#ffffff'
+            });
+
             if (!isFirstPage) pdf.addPage([pdfW, pageH]);
             isFirstPage = false;
-            var sc = document.createElement('canvas');
-            sc.width = pdfW * SCALE; sc.height = pageH * SCALE;
-            var ctx = sc.getContext('2d');
-            ctx.fillStyle = '#ffffff'; ctx.fillRect(0, 0, sc.width, sc.height);
-            ctx.drawImage(sectionCanvas, 0, 0);
-            pdf.addImage(sc.toDataURL('image/jpeg', 0.95), 'JPEG', 0, 0, pdfW, pageH);
-          } else {
-            for (var si = 0; si < bins.length; si++) {
-              var bin = bins[si];
-              var sliceH = bin.endY - bin.startY;
-              var pageH2 = Math.min(sliceH, pdfH);
-              if (!isFirstPage) pdf.addPage([pdfW, pageH2]);
-              isFirstPage = false;
-              var sc2 = document.createElement('canvas');
-              sc2.width = pdfW * SCALE; sc2.height = pageH2 * SCALE;
-              var ctx2 = sc2.getContext('2d');
-              ctx2.fillStyle = '#ffffff'; ctx2.fillRect(0, 0, sc2.width, sc2.height);
-              ctx2.drawImage(sectionCanvas, 0, -(bin.startY * SCALE));
-              pdf.addImage(sc2.toDataURL('image/jpeg', 0.95), 'JPEG', 0, 0, pdfW, pageH2);
-            }
+            pdf.addImage(pageCanvas.toDataURL('image/jpeg', 0.95), 'JPEG', 0, 0, pdfW, pageH);
           }
         }
 
         document.body.removeChild(host);
+        document.body.removeChild(overlay);
 
         var slug = filename.replace(/^PercIQ-/, '').replace(/\.pdf$/, '');
         pdf.save('PercIQ-' + slug + '.pdf');
         dlLabel.textContent = 'Save as PDF';
         dlBtn.disabled = false;
       }).catch(function(err) {
+        var ol = document.querySelector('[data-pdf-overlay]');
+        if (ol && ol.parentNode) ol.parentNode.removeChild(ol);
+        var ho = document.querySelector('[data-pdf-host]');
+        if (ho && ho.parentNode) ho.parentNode.removeChild(ho);
         console.error('PDF generation failed', err);
         dlLabel.textContent = 'Save as PDF';
         dlBtn.disabled = false;

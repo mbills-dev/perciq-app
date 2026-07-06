@@ -3665,9 +3665,8 @@ function MapPanel({ reportId, cachedOverlayGeojson, parcelBoundary, isBboxFallba
 
     function captureComposited() {
       if (!map) return;
-      // Force flat north-up orientation before capture
-      map.setPitch(0);
-      map.setBearing(0);
+      // Instant camera reset — jumpTo is non-animated so no race with fitBounds
+      map.jumpTo({ pitch: 0, bearing: 0 });
       // Re-fit to parcel with zero animation so the idle event fires immediately
       if (parcelBoundary) {
         try {
