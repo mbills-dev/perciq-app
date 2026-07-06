@@ -61,18 +61,31 @@ interface Props {
   billingInterval: 'monthly' | 'annual';
   currentPlan?: PlanTier | null;
   checkoutLoading?: string | null;
-  /** Label for the CTA button. Defaults to "Select {name}". */
+  isTrial?: boolean;
+  /** Label for the CTA button. Defaults to "Select {name}". Only used when not trialing. */
   ctaLabel?: (plan: PricingPlan) => string;
   onSelect: (planId: PlanTier) => void;
 }
 
-export function PlanCards({ billingInterval, currentPlan, checkoutLoading, ctaLabel, onSelect }: Props) {
+export function PlanCards({ billingInterval, currentPlan, checkoutLoading, isTrial, ctaLabel, onSelect }: Props) {
   return (
     <div className="space-y-4">
       {PLANS.map(plan => {
         const price = billingInterval === 'annual' ? plan.annualPrice : plan.monthlyPrice;
         const isCurrent = currentPlan === plan.id;
         const isLoading = checkoutLoading === plan.id;
+
+        // For trialing users, the current plan card is active (not disabled)
+        const isDisabled = isCurrent && !isTrial;
+        const isTrialCurrent = isTrial && isCurrent;
+
+        function getLabel() {
+          if (isDisabled) return 'Current Plan';
+          if (isTrialCurrent) return `Start ${plan.name} now`;
+          if (isTrial) return 'Upgrade & start now';
+          if (ctaLabel) return ctaLabel(plan);
+          return `Select ${plan.name}`;
+        }
 
         return (
           <div
@@ -116,26 +129,31 @@ export function PlanCards({ billingInterval, currentPlan, checkoutLoading, ctaLa
 
             <button
               onClick={() => onSelect(plan.id)}
-              disabled={isLoading || isCurrent}
+              disabled={isLoading || isDisabled}
               className={`w-full flex items-center justify-center gap-2 py-2.5 rounded-xl text-sm font-bold transition-all duration-200 disabled:opacity-50 ${
-                isCurrent
+                isDisabled
                   ? 'bg-white/5 border border-white/10 text-white/30 cursor-default'
-                  : plan.highlight
+                  : plan.highlight || isTrialCurrent
                     ? 'bg-primary-500 hover:bg-primary-400 text-white'
                     : 'bg-white/8 hover:bg-white/12 border border-white/10 text-white'
               }`}
             >
               {isLoading ? (
                 <Loader2 className="w-3.5 h-3.5 animate-spin" />
-              ) : isCurrent ? (
-                'Current Plan'
               ) : (
                 <>
-                  {ctaLabel ? ctaLabel(plan) : `Select ${plan.name}`}
-                  <ArrowRight className="w-3.5 h-3.5" />
+                  {getLabel()}
+                  {!isDisabled && <ArrowRight className="w-3.5 h-3.5" />}
                 </>
               )}
             </button>
+
+            {/* Trial-current subtext */}
+            {isTrialCurrent && (
+              <p className="text-xs text-white/35 mt-2.5 text-center leading-relaxed">
+                End your free trial early — your card will be charged ${price} today and your full {plan.analyses} unlocks immediately.
+              </p>
+            )}
           </div>
         );
       })}

@@ -11,7 +11,7 @@ import CountyAutocomplete from './CountyAutocomplete';
 interface DashboardProps {
   onViewReport: (reportId: string) => void;
   onCreateReport: (parcelId: string) => void;
-  onNavigateSettings?: () => void;
+  onNavigateSettings?: (tab?: 'profile' | 'billing', billingView?: 'overview' | 'upgrade') => void;
 }
 
 // ─── Score helpers ────────────────────────────────────────────────────────────
@@ -1357,7 +1357,7 @@ export default function Dashboard({ onViewReport, onCreateReport, onNavigateSett
                 Cancel
               </button>
               <button
-                onClick={() => { setShowLimitModal(false); onNavigateSettings?.(); }}
+                onClick={() => { setShowLimitModal(false); onNavigateSettings?.('billing', 'upgrade'); }}
                 style={{ flex: 2, padding: '10px 0', borderRadius: 10, background: '#22C55E', border: 'none', color: '#000', fontSize: 13, fontWeight: 700, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6 }}
               >
                 <Zap style={{ width: 14, height: 14 }} />
@@ -1404,7 +1404,7 @@ export default function Dashboard({ onViewReport, onCreateReport, onNavigateSett
                 Cancel
               </button>
               <button
-                onClick={() => { setShowTrialLimitModal(false); onNavigateSettings?.(); }}
+                onClick={() => { setShowTrialLimitModal(false); onNavigateSettings?.('billing', 'upgrade'); }}
                 style={{ flex: 2, padding: '10px 0', borderRadius: 10, background: '#22C55E', border: 'none', color: '#000', fontSize: 13, fontWeight: 700, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6 }}
               >
                 <Zap style={{ width: 14, height: 14 }} />

@@ -47,6 +47,7 @@ function getPublicReportId(): string | null {
 
 type Page = 'dashboard' | 'settings';
 type SettingsTab = 'profile' | 'billing';
+type SettingsBillingView = 'overview' | 'upgrade';
 
 function getReportIdFromUrl(): string | null {
   const params = new URLSearchParams(window.location.search);
@@ -106,6 +107,7 @@ function AuthenticatedApp() {
   const [subChecked, setSubChecked] = useState(false);
   const [currentPage, setCurrentPage] = useState<Page>('dashboard');
   const [settingsTab, setSettingsTab] = useState<SettingsTab>('profile');
+  const [settingsBillingView, setSettingsBillingView] = useState<SettingsBillingView>('overview');
   const [viewingReportId, setViewingReportId] = useState<string | null>(getReportIdFromUrl);
 
   // Capture ?plan= (and ?interval=) param on every page load so it survives auth redirect
@@ -145,9 +147,10 @@ function AuthenticatedApp() {
       });
   }, [user]);
 
-  function handleNavigate(page: Page, tab?: SettingsTab) {
+  function handleNavigate(page: Page, tab?: SettingsTab, billingView?: SettingsBillingView) {
     setCurrentPage(page);
     if (tab) setSettingsTab(tab);
+    setSettingsBillingView(billingView ?? 'overview');
     setViewingReportId(null);
     setReportIdInUrl(null);
   }
@@ -285,11 +288,11 @@ function AuthenticatedApp() {
         <Dashboard
           onViewReport={handleViewReport}
           onCreateReport={handleCreateReport}
-          onNavigateSettings={() => handleNavigate('settings')}
+          onNavigateSettings={(tab, billingView) => handleNavigate('settings', tab ?? 'billing', billingView)}
         />
       )}
       {currentPage === 'settings' && (
-        <SettingsPage user={user} initialTab={settingsTab} />
+        <SettingsPage user={user} initialTab={settingsTab} initialBillingView={settingsBillingView} />
       )}
     </Layout>
   );

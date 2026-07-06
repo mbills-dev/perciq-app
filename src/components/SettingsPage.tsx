@@ -8,7 +8,7 @@ import {
   CheckCircle2, AlertCircle, Loader2, Zap, ArrowRight,
   ExternalLink, ChevronDown, X, XCircle,
 } from 'lucide-react';
-import { PlanCards } from './PlanCards';
+import { PlanCards, PLANS } from './PlanCards';
 
 type Tab = 'profile' | 'billing';
 type BillingView = 'overview' | 'upgrade';
@@ -35,6 +35,7 @@ interface StripeData {
 interface Props {
   user: User;
   initialTab?: Tab;
+  initialBillingView?: BillingView;
 }
 
 async function callEdgeFunction(slug: string, body: unknown, token: string) {
@@ -50,9 +51,9 @@ async function callEdgeFunction(slug: string, body: unknown, token: string) {
   return res.json();
 }
 
-export default function SettingsPage({ user, initialTab }: Props) {
+export default function SettingsPage({ user, initialTab, initialBillingView }: Props) {
   const [tab, setTab] = useState<Tab>(initialTab ?? 'profile');
-  const [billingView, setBillingView] = useState<BillingView>('overview');
+  const [billingView, setBillingView] = useState<BillingView>(initialBillingView ?? 'overview');
   const [profile, setProfile] = useState<UserProfile | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -65,6 +66,10 @@ export default function SettingsPage({ user, initialTab }: Props) {
   const [portalLoading, setPortalLoading] = useState(false);
   const [checkoutLoading, setCheckoutLoading] = useState<string | null>(null);
   const [billingInterval, setBillingInterval] = useState<'monthly' | 'annual'>('monthly');
+
+  // Trial-end confirmation modal state
+  const [trialEndConfirm, setTrialEndConfirm] = useState<{ planId: PlanTier; price: number; planName: string } | null>(null);
+  const [trialEndLoading, setTrialEndLoading] = useState(false);
 
   // Cancel subscription modal state
   const [cancelStep, setCancelStep] = useState<CancelStep>(null);
@@ -206,6 +211,17 @@ export default function SettingsPage({ user, initialTab }: Props) {
   }
 
   async function handleSelectPlan(planId: PlanTier) {
+    // Trialing users end (and optionally switch) their trial instead of creating a new checkout session.
+    // This prevents a second subscription being created while the trial subscription still exists.
+    if (isTrial) {
+      const plan = PLANS.find(p => p.id === planId);
+      if (plan) {
+        const price = billingInterval === 'annual' ? plan.annualPrice : plan.monthlyPrice;
+        setTrialEndConfirm({ planId, price, planName: plan.name });
+      }
+      return;
+    }
+
     setCheckoutLoading(planId);
     try {
       const { data: { session } } = await supabase.auth.getSession();
@@ -222,6 +238,35 @@ export default function SettingsPage({ user, initialTab }: Props) {
       showToast('error', 'Could not start checkout.');
     } finally {
       setCheckoutLoading(null);
+    }
+  }
+
+  async function handleConfirmEndTrial() {
+    if (!trialEndConfirm) return;
+    setTrialEndLoading(true);
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session) return;
+
+      const isSamePlan = trialEndConfirm.planId === activePlan;
+      const body = isSamePlan ? {} : { plan: trialEndConfirm.planId, interval: billingInterval };
+      const result = await callEdgeFunction('end-trial-now', body, session.access_token) as { success?: boolean; error?: string };
+
+      if (result.error) {
+        showToast('error', result.error);
+        return;
+      }
+
+      const planLabel = trialEndConfirm.planName;
+      setTrialEndConfirm(null);
+      showToast('success', `Your ${planLabel} plan is now active — full allowance unlocked.`);
+      // Re-fetch from Stripe so the billing overview reflects the updated status
+      await loadStripeData();
+      setBillingView('overview');
+    } catch (e) {
+      showToast('error', e instanceof Error ? e.message : 'Failed to end trial — please try again.');
+    } finally {
+      setTrialEndLoading(false);
     }
   }
 
@@ -529,21 +574,21 @@ export default function SettingsPage({ user, initialTab }: Props) {
                   </p>
                 )}
 
-                <div className="flex gap-3">
-                  <button
-                    onClick={handleManageSubscription}
-                    disabled={portalLoading}
-                    className="flex-1 flex items-center justify-center gap-2 py-2.5 rounded-xl bg-white/8 hover:bg-white/12 border border-white/10 text-white text-sm font-semibold transition-all duration-200 disabled:opacity-50"
-                  >
-                    {portalLoading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <ExternalLink className="w-3.5 h-3.5" />}
-                    Manage Subscription
-                  </button>
+                <div className="flex flex-col gap-2.5">
                   <button
                     onClick={() => setBillingView('upgrade')}
-                    className="flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl bg-primary-500/15 hover:bg-primary-500/25 border border-primary-500/30 text-primary-400 text-sm font-semibold transition-all duration-200"
+                    className="w-full flex items-center justify-center gap-2 py-2.5 rounded-xl bg-primary-500/15 hover:bg-primary-500/25 border border-primary-500/30 text-primary-400 text-sm font-semibold transition-all duration-200"
                   >
                     <ChevronDown className="w-3.5 h-3.5 rotate-[-90deg]" />
                     Change Plan
+                  </button>
+                  <button
+                    onClick={handleManageSubscription}
+                    disabled={portalLoading}
+                    className="flex items-center justify-center gap-1.5 py-1.5 text-xs text-white/35 hover:text-white/60 transition-colors disabled:opacity-50 mx-auto"
+                  >
+                    {portalLoading ? <Loader2 className="w-3 h-3 animate-spin" /> : <ExternalLink className="w-3 h-3" />}
+                    Payment methods &amp; invoices
                   </button>
                 </div>
 
@@ -706,12 +751,61 @@ export default function SettingsPage({ user, initialTab }: Props) {
             billingInterval={billingInterval}
             currentPlan={activePlan}
             checkoutLoading={checkoutLoading}
+            isTrial={isTrial}
             onSelect={handleSelectPlan}
           />
 
           <p className="text-xs text-white/25 text-center mt-6">
             All plans include a 7-day free trial. Cancel anytime.
           </p>
+        </div>
+      )}
+
+      {/* ── Trial End Confirmation Modal ── */}
+      {trialEndConfirm && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
+          <div className="relative w-full max-w-md bg-navy-800 border border-white/10 rounded-2xl p-6 shadow-2xl">
+            <button
+              onClick={() => setTrialEndConfirm(null)}
+              className="absolute top-4 right-4 text-white/30 hover:text-white/70 transition-colors"
+              aria-label="Close"
+            >
+              <X className="w-4 h-4" />
+            </button>
+
+            <div className="flex items-center gap-3 mb-4">
+              <div className="w-9 h-9 rounded-xl bg-primary-500/15 border border-primary-500/25 flex items-center justify-center flex-shrink-0">
+                <Zap className="w-4 h-4 text-primary-400" />
+              </div>
+              <h2 className="text-base font-bold text-white">Start your plan now?</h2>
+            </div>
+
+            <p className="text-sm text-white/55 mb-2 leading-relaxed">
+              You'll be charged <strong className="text-white">${trialEndConfirm.price}</strong>/mo today. Your free trial ends immediately and your full{' '}
+              <strong className="text-white capitalize">{trialEndConfirm.planName}</strong> plan unlocks.
+            </p>
+            <p className="text-xs text-white/30 mb-6 leading-relaxed">
+              This action cannot be undone. Your card on file will be charged at the current billing interval.
+            </p>
+
+            <div className="flex flex-col gap-2.5">
+              <button
+                onClick={handleConfirmEndTrial}
+                disabled={trialEndLoading}
+                className="w-full flex items-center justify-center gap-2 py-2.5 rounded-xl bg-primary-500 hover:bg-primary-400 text-white text-sm font-bold transition-all duration-200 disabled:opacity-50"
+              >
+                {trialEndLoading && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
+                Yes, charge my card now
+              </button>
+              <button
+                onClick={() => setTrialEndConfirm(null)}
+                disabled={trialEndLoading}
+                className="w-full py-2.5 rounded-xl bg-white/5 hover:bg-white/10 border border-white/10 text-white text-sm font-semibold transition-all duration-200 disabled:opacity-40"
+              >
+                Keep my free trial
+              </button>
+            </div>
+          </div>
         </div>
       )}
 
