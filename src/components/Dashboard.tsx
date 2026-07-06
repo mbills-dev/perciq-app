@@ -716,6 +716,9 @@ export default function Dashboard({ onViewReport, onCreateReport, onNavigateSett
   const [userPlan, setUserPlan] = useState<PlanTier>('free');
   const [analysesUsed, setAnalysesUsed] = useState(0);
 
+  const supabaseUrl = import.meta.env.VITE_SUPABASE_URL as string;
+  const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY as string;
+
   useEffect(() => { loadData(); loadUsage(); }, []);
 
   async function loadData() {
@@ -750,30 +753,44 @@ export default function Dashboard({ onViewReport, onCreateReport, onNavigateSett
   async function loadUsage() {
     const { data } = await supabase
       .from('user_profiles')
-      .select('plan, monthly_analyses_used, analyses_reset_at')
+      .select('plan, subscription_status, monthly_analyses_used')
       .maybeSingle();
     if (data) {
       const plan = (data.plan ?? 'free') as PlanTier;
       setUserPlan(plan);
-      // Reset counter if it's a new calendar month
-      const resetAt = data.analyses_reset_at ? new Date(data.analyses_reset_at) : null;
-      const now = new Date();
-      if (resetAt && (resetAt.getMonth() !== now.getMonth() || resetAt.getFullYear() !== now.getFullYear())) {
-        await supabase.from('user_profiles').update({ monthly_analyses_used: 0, analyses_reset_at: now.toISOString() }).eq('id', (await supabase.auth.getUser()).data.user!.id);
-        setAnalysesUsed(0);
-      } else {
-        setAnalysesUsed(data.monthly_analyses_used ?? 0);
-      }
+      setAnalysesUsed(data.monthly_analyses_used ?? 0);
     }
   }
 
-  function handleAddParcel() {
+  async function handleAddParcel() {
     const limit = PLAN_LIMITS[userPlan];
     if (limit !== null && analysesUsed >= limit) {
       setShowLimitModal(true);
-    } else {
-      setShowModal(true);
+      return;
     }
+    // Call server-side increment before opening the modal — blocks if limit reached
+    const { data: { session } } = await supabase.auth.getSession();
+    if (!session) return;
+    const resp = await fetch(`${supabaseUrl}/functions/v1/increment-analysis-count`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${session.access_token}`,
+        apikey: supabaseAnonKey,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({}),
+    });
+    if (resp.status === 403) {
+      setShowLimitModal(true);
+      return;
+    }
+    if (resp.ok) {
+      const result = await resp.json() as { monthly_analyses_used?: number };
+      if (result.monthly_analyses_used !== undefined) {
+        setAnalysesUsed(result.monthly_analyses_used);
+      }
+    }
+    setShowModal(true);
   }
 
   function enterSelectionMode() {
@@ -1234,14 +1251,6 @@ export default function Dashboard({ onViewReport, onCreateReport, onNavigateSett
           onClose={() => setShowModal(false)}
           onCreated={async (reportId) => {
             setShowModal(false);
-            // Increment usage counter
-            const { data: { user } } = await supabase.auth.getUser();
-            if (user) {
-              await supabase.from('user_profiles')
-                .update({ monthly_analyses_used: analysesUsed + 1 })
-                .eq('id', user.id);
-              setAnalysesUsed(prev => prev + 1);
-            }
             loadData();
             onViewReport(reportId);
           }}
@@ -1320,12 +1329,10 @@ export default function Dashboard({ onViewReport, onCreateReport, onNavigateSett
               <Zap style={{ width: 22, height: 22, color: '#22C55E' }} />
             </div>
             <h3 style={{ fontSize: 18, fontWeight: 700, color: '#fff', marginBottom: 8 }}>
-              {userPlan === 'free' ? 'Free trial limit reached' : 'Monthly limit reached'}
+              Monthly limit reached
             </h3>
             <p style={{ fontSize: 14, color: 'rgba(255,255,255,0.45)', lineHeight: 1.6, marginBottom: 24 }}>
-              {userPlan === 'free'
-                ? `You've used all 3 free analyses. Upgrade to continue analyzing parcels.`
-                : `You've used all ${PLAN_LIMITS[userPlan]} analyses for this month. Upgrade for a higher limit.`}
+              {`You've used all ${PLAN_LIMITS[userPlan] ?? '∞'} analyses for this month. Upgrade for a higher limit.`}
             </p>
             <div style={{ display: 'flex', gap: 10 }}>
               <button

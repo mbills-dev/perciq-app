@@ -103,6 +103,7 @@ Deno.serve(async (req: Request) => {
 
     const sessionParams: Parameters<typeof stripe.checkout.sessions.create>[0] = {
       customer: customerId,
+      client_reference_id: user.id,
       payment_method_types: ["card"],
       line_items: [{ price: priceId, quantity: 1 }],
       mode: isSingleReport ? "payment" : "subscription",
@@ -113,6 +114,7 @@ Deno.serve(async (req: Request) => {
 
     if (!isSingleReport) {
       sessionParams.subscription_data = {
+        trial_period_days: 7,
         metadata: { supabase_user_id: user.id, plan },
       };
     } else {

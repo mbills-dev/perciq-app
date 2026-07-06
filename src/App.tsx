@@ -7,26 +7,35 @@ import Dashboard from './components/Dashboard';
 import ReportDetail from './components/ReportDetail';
 import SettingsPage from './components/SettingsPage';
 import PublicReportPage from './components/PublicReportPage';
+import ChoosePlanPage from './components/ChoosePlanPage';
 import { Layers } from 'lucide-react';
 
 const VALID_PLANS = ['starter', 'pro', 'unlimited', 'single_report'] as const;
 type PlanSlug = typeof VALID_PLANS[number];
 
 const PLAN_SESSION_KEY = 'perciq_pending_plan';
+const INTERVAL_SESSION_KEY = 'perciq_pending_interval';
 
 function capturePlanParam() {
   const params = new URLSearchParams(window.location.search);
   const plan = params.get('plan');
+  const interval = params.get('interval');
   if (plan && VALID_PLANS.includes(plan as PlanSlug)) {
     sessionStorage.setItem(PLAN_SESSION_KEY, plan);
+    if (interval === 'annual') {
+      sessionStorage.setItem(INTERVAL_SESSION_KEY, 'annual');
+    }
   }
 }
 
-function consumePendingPlan(): PlanSlug | null {
+function consumePendingPlan(): { plan: PlanSlug; interval: 'monthly' | 'annual' | 'one_time' } | null {
   const plan = sessionStorage.getItem(PLAN_SESSION_KEY) as PlanSlug | null;
   if (plan && VALID_PLANS.includes(plan)) {
+    const interval = sessionStorage.getItem(INTERVAL_SESSION_KEY) as 'annual' | null;
     sessionStorage.removeItem(PLAN_SESSION_KEY);
-    return plan;
+    sessionStorage.removeItem(INTERVAL_SESSION_KEY);
+    const resolvedInterval = plan === 'single_report' ? 'one_time' : (interval ?? 'monthly');
+    return { plan, interval: resolvedInterval };
   }
   return null;
 }
@@ -54,7 +63,11 @@ function setReportIdInUrl(reportId: string | null) {
   window.history.replaceState(null, '', url.toString());
 }
 
-async function redirectToStripeCheckout(plan: PlanSlug, authToken: string) {
+async function redirectToStripeCheckout(
+  plan: PlanSlug,
+  interval: 'monthly' | 'annual' | 'one_time',
+  authToken: string
+) {
   const supabaseUrl = import.meta.env.VITE_SUPABASE_URL as string;
   const anonKey = import.meta.env.VITE_SUPABASE_ANON_KEY as string;
   const origin = window.location.origin;
@@ -68,7 +81,7 @@ async function redirectToStripeCheckout(plan: PlanSlug, authToken: string) {
       },
       body: JSON.stringify({
         plan,
-        interval: plan === 'single_report' ? 'one_time' : 'monthly',
+        interval,
         successUrl: `${origin}/?checkout=success`,
         cancelUrl: `${origin}/`,
       }),
@@ -82,14 +95,20 @@ async function redirectToStripeCheckout(plan: PlanSlug, authToken: string) {
   }
 }
 
+function isSubscribed(status: string | null | undefined): boolean {
+  return status === 'active' || status === 'trialing';
+}
+
 function AuthenticatedApp() {
   const [user, setUser] = useState<User | null>(null);
   const [authLoading, setAuthLoading] = useState(true);
+  const [subscriptionStatus, setSubscriptionStatus] = useState<string | null>(null);
+  const [subChecked, setSubChecked] = useState(false);
   const [currentPage, setCurrentPage] = useState<Page>('dashboard');
   const [settingsTab, setSettingsTab] = useState<SettingsTab>('profile');
   const [viewingReportId, setViewingReportId] = useState<string | null>(getReportIdFromUrl);
 
-  // Capture ?plan= param on every page load so it survives the auth redirect
+  // Capture ?plan= (and ?interval=) param on every page load so it survives auth redirect
   useEffect(() => { capturePlanParam(); }, []);
 
   useEffect(() => {
@@ -102,14 +121,29 @@ function AuthenticatedApp() {
       setUser(session?.user ?? null);
       if (event === 'SIGNED_IN' && session) {
         (async () => {
-          const plan = consumePendingPlan();
-          if (plan) {
-            await redirectToStripeCheckout(plan, session.access_token);
+          const pending = consumePendingPlan();
+          if (pending) {
+            await redirectToStripeCheckout(pending.plan, pending.interval, session.access_token);
           }
         })();
       }
     });
   }, []);
+
+  // Load subscription status whenever user changes
+  useEffect(() => {
+    if (!user) { setSubChecked(false); return; }
+    setSubChecked(false);
+    supabase
+      .from('user_profiles')
+      .select('subscription_status')
+      .eq('id', user.id)
+      .maybeSingle()
+      .then(({ data }) => {
+        setSubscriptionStatus(data?.subscription_status ?? null);
+        setSubChecked(true);
+      });
+  }, [user]);
 
   function handleNavigate(page: Page, tab?: SettingsTab) {
     setCurrentPage(page);
@@ -206,6 +240,23 @@ function AuthenticatedApp() {
 
   if (!user) {
     return <AuthPage />;
+  }
+
+  // Still loading subscription status — show spinner to avoid flicker
+  if (!subChecked) {
+    return (
+      <div className="min-h-screen bg-navy-900 flex items-center justify-center">
+        <div className="flex flex-col items-center gap-4">
+          <div className="w-8 h-8 border-2 border-white/10 border-t-primary-400 rounded-full animate-spin" />
+          <p className="text-white/30 text-sm">Loading PercIQ...</p>
+        </div>
+      </div>
+    );
+  }
+
+  // Unsubscribed users must choose a plan before accessing the app
+  if (!isSubscribed(subscriptionStatus)) {
+    return <ChoosePlanPage userEmail={user.email ?? ''} />;
   }
 
   if (viewingReportId) {
