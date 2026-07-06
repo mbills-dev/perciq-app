@@ -14,6 +14,8 @@ const PLAN_LIMITS: Record<string, number | null> = {
   unlimited: null,
 };
 
+const PERIOD_DAYS = 30;
+
 Deno.serve(async (req: Request) => {
   if (req.method === "OPTIONS") {
     return new Response(null, { status: 200, headers: corsHeaders });
@@ -28,7 +30,6 @@ Deno.serve(async (req: Request) => {
       });
     }
 
-    // Authenticate user from JWT
     const anonClient = createClient(
       Deno.env.get("SUPABASE_URL")!,
       Deno.env.get("SUPABASE_ANON_KEY")!,
@@ -42,7 +43,6 @@ Deno.serve(async (req: Request) => {
       });
     }
 
-    // Use service role to read and atomically update the counter
     const supabase = createClient(
       Deno.env.get("SUPABASE_URL")!,
       Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!
@@ -50,7 +50,7 @@ Deno.serve(async (req: Request) => {
 
     const { data: profile, error: profileError } = await supabase
       .from("user_profiles")
-      .select("plan, subscription_status, monthly_analyses_used, analyses_reset_at")
+      .select("plan, subscription_status, monthly_analyses_used, usage_period_start")
       .eq("id", user.id)
       .maybeSingle();
 
@@ -61,7 +61,6 @@ Deno.serve(async (req: Request) => {
       });
     }
 
-    // Require active or trialing subscription
     const status = profile.subscription_status as string | null;
     if (status !== "active" && status !== "trialing") {
       return new Response(JSON.stringify({ error: "No active subscription" }), {
@@ -72,16 +71,19 @@ Deno.serve(async (req: Request) => {
 
     const plan = (profile.plan ?? "free") as string;
     const limit = PLAN_LIMITS[plan] ?? null;
-
-    // Reset counter if it's a new calendar month
-    let currentUsed = (profile.monthly_analyses_used ?? 0) as number;
-    const resetAt = profile.analyses_reset_at ? new Date(profile.analyses_reset_at as string) : null;
     const now = new Date();
-    if (resetAt && (resetAt.getMonth() !== now.getMonth() || resetAt.getFullYear() !== now.getFullYear())) {
-      currentUsed = 0;
-    }
 
-    // Enforce limit
+    // Lazily reset counter if usage_period_start is null or more than 30 days old
+    const periodStart = profile.usage_period_start
+      ? new Date(profile.usage_period_start as string)
+      : null;
+    const periodAgeMs = periodStart ? now.getTime() - periodStart.getTime() : Infinity;
+    const needsReset = periodAgeMs > PERIOD_DAYS * 24 * 60 * 60 * 1000;
+
+    let currentUsed = needsReset ? 0 : (profile.monthly_analyses_used ?? 0) as number;
+    const newPeriodStart = needsReset ? now.toISOString() : (profile.usage_period_start as string | null);
+
+    // Enforce limit after reset
     if (limit !== null && currentUsed >= limit) {
       return new Response(JSON.stringify({ error: "Monthly analysis limit reached" }), {
         status: 403,
@@ -89,14 +91,13 @@ Deno.serve(async (req: Request) => {
       });
     }
 
-    // Atomically increment
     const newCount = currentUsed + 1;
+    const updateFields: Record<string, unknown> = { monthly_analyses_used: newCount };
+    if (needsReset) updateFields.usage_period_start = newPeriodStart;
+
     const { error: updateError } = await supabase
       .from("user_profiles")
-      .update({
-        monthly_analyses_used: newCount,
-        analyses_reset_at: currentUsed === 0 ? now.toISOString() : profile.analyses_reset_at,
-      })
+      .update(updateFields)
       .eq("id", user.id);
 
     if (updateError) {
