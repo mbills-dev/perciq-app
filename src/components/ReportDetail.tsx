@@ -3660,14 +3660,78 @@ function MapPanel({ reportId, cachedOverlayGeojson, parcelBoundary, isBboxFallba
     setStillLoadingBanner(false);
     setOverlayFading(true);
     onAllLayersReadyRef.current?.();
-    // Capture map canvas after a brief paint delay so all layers are rendered
-    setTimeout(() => {
-      const canvas = mapRef.current?.getCanvas();
-      if (canvas) onCanvasReadyRef.current?.(canvas);
-    }, 800);
+
+    const map = mapRef.current;
+
+    function captureComposited() {
+      if (!map) return;
+      // Re-fit to parcel with zero animation so the idle event fires immediately
+      if (parcelBoundary) {
+        try {
+          const coords = extractCoords(parcelBoundary);
+          if (coords.length) {
+            const bounds = coords.reduce(
+              (b, c) => b.extend(c as [number, number]),
+              new mapboxgl.LngLatBounds(coords[0] as [number, number], coords[0] as [number, number])
+            );
+            map.fitBounds(bounds, { padding: 40, maxZoom: 18, duration: 0 });
+          }
+        } catch { /* ignore */ }
+      }
+
+      map.once('idle', () => {
+        const mapCanvas = map.getCanvas();
+        // Composite perc pin circles onto a copy of the map canvas
+        const out = document.createElement('canvas');
+        out.width = mapCanvas.width;
+        out.height = mapCanvas.height;
+        const ctx = out.getContext('2d')!;
+        ctx.drawImage(mapCanvas, 0, 0);
+
+        const PIN_COLORS = ['#FFFFFF', '#334155', '#94A3B8'];
+        const PIN_BORDER = '#0A0F1E';
+        const dpr = window.devicePixelRatio || 1;
+        const pinRadius = 11 * dpr;
+        const fontSize = Math.round(10 * dpr);
+
+        percMarkersRef.current.forEach((marker, idx) => {
+          const lngLat = marker.getLngLat();
+          const pt = map.project(lngLat);
+          const px = pt.x * dpr;
+          const py = pt.y * dpr;
+          const fill = PIN_COLORS[idx] ?? '#FFFFFF';
+
+          ctx.save();
+          ctx.shadowColor = 'rgba(0,0,0,0.5)';
+          ctx.shadowBlur = 4 * dpr;
+          ctx.shadowOffsetY = 2 * dpr;
+          ctx.beginPath();
+          ctx.arc(px, py, pinRadius, 0, Math.PI * 2);
+          ctx.fillStyle = fill;
+          ctx.fill();
+          ctx.shadowColor = 'transparent';
+          ctx.shadowBlur = 0;
+          ctx.shadowOffsetY = 0;
+          ctx.lineWidth = 2.5 * dpr;
+          ctx.strokeStyle = PIN_BORDER;
+          ctx.stroke();
+          ctx.fillStyle = PIN_BORDER;
+          ctx.font = `bold ${fontSize}px Arial,sans-serif`;
+          ctx.textAlign = 'center';
+          ctx.textBaseline = 'middle';
+          ctx.fillText(String(idx + 1), px, py + 0.5 * dpr);
+          ctx.restore();
+        });
+
+        onCanvasReadyRef.current?.(out);
+      });
+    }
+
+    // Small delay to ensure layers are painted before we refit + capture
+    const captureTimer = setTimeout(captureComposited, 200);
+
     const id = setTimeout(() => {
       setOverlayGone(true);
-      const map = mapRef.current;
       if (map && !initialCameraRef.current) {
         initialCameraRef.current = {
           zoom: map.getZoom(),
@@ -3677,8 +3741,8 @@ function MapPanel({ reportId, cachedOverlayGeojson, parcelBoundary, isBboxFallba
         };
       }
     }, timedOut ? 2420 : 420);
-    return () => clearTimeout(id);
-  }, [allReady, timedOut]);
+    return () => { clearTimeout(captureTimer); clearTimeout(id); };
+  }, [allReady, timedOut, parcelBoundary]);
 
   if (mapError) {
     return (
@@ -5610,16 +5674,15 @@ export default function ReportDetail({ reportId, onBack, isPublic = false }: Rep
             onAllLayersReady={() => {
               console.log('[map] all layers ready — overlay dismissed');
               setMapLayersReady(true);
-              const canvas = mapRef.current?.getCanvas();
-              if (canvas) {
-                try {
-                  mapSnapshotRef.current = canvas.toDataURL('image/jpeg', 0.92);
-                } catch (e) {
-                  console.warn('[map] snapshot failed:', e);
-                }
+            }}
+            onCanvasReady={(canvas) => {
+              mapCanvasRef.current = canvas;
+              try {
+                mapSnapshotRef.current = canvas.toDataURL('image/jpeg', 0.92);
+              } catch (e) {
+                console.warn('[map] composited snapshot failed:', e);
               }
             }}
-            onCanvasReady={(canvas) => { mapCanvasRef.current = canvas; }}
             onBestZoneInFlood={setBestZoneInFloodWarning}
             onPercFallback={(exhausted) => setPercFallbackWarning(exhausted ? 'exhausted' : 'expanded')}
             onPercPinsReady={(pins) => { percPinsRef.current = pins; }}

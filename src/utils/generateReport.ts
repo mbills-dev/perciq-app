@@ -1099,7 +1099,7 @@ export function generateReportHTML(data: ReportData, meta?: { shareUrl?: string;
   </div>
   <div class="pg-rule"></div>
   <div class="pg-body">
-    <p class="pg-intro" style="margin-bottom:14px">Optimal starting points for a licensed soil scientist \u2014 selected to maximize distance from property edges, flood zones, and wetland boundaries while staying within the highest-scoring soil zones.</p>
+    <p class="pg-intro" style="margin-bottom:14px">Optimal starting points for a licensed soil scientist \u2014 selected to maximize distance from property edges, flood zones, and wetland boundaries while staying within the highest-scoring soil zones. These are highest-likelihood starting points for a licensed evaluator \u2014 not guaranteed test locations.</p>
 
     ${mapSlotHtml}
 
@@ -1115,7 +1115,7 @@ export function generateReportHTML(data: ReportData, meta?: { shareUrl?: string;
 
     <div class="disc">
       <div class="disc-t">Important Disclaimer</div>
-      <div class="disc-b">This PercIQ report is generated from federal and public-domain geographic data and is a directional pre-screening tool only. It does not constitute a site evaluation, professional engineering assessment, or guarantee of septic permit approval. Actual on-site conditions can vary significantly from SSURGO predictions. A licensed site evaluation is required before any permit application. PercIQ and Lumi\u00e8re Holdings LLC make no warranties regarding permit outcomes. Report generated ${data.generatedDate} \u00b7 perciq.com</div>
+      <div class="disc-b">This PercIQ report is generated from federal and public-domain geographic data and is a directional pre-screening tool only. It does not constitute a site evaluation, professional engineering assessment, or guarantee of septic permit approval. Actual on-site conditions can vary significantly from SSURGO predictions. A licensed site evaluation is required before any permit application. PercIQ and Lumi\u00e8re Holdings LLC make no warranties regarding permit outcomes. This report should not be used as the sole basis for any purchase, sale, or development decision. Report generated ${data.generatedDate} \u00b7 perciq.com</div>
     </div>
 
   </div>
@@ -1163,28 +1163,76 @@ export function generateReportHTML(data: ReportData, meta?: { shareUrl?: string;
         var jsPDFLib = window.jspdf || window.jsPDF;
         var pdf = new jsPDFLib.jsPDF({ unit: 'px', format: [pdfW, pdfH], orientation: 'portrait' });
         var isFirstPage = true;
-        var pages = Array.from(document.querySelectorAll('.cover, .pg'));
+        var sections = Array.from(document.querySelectorAll('.cover, .pg'));
 
-        for (var pi = 0; pi < pages.length; pi++) {
-          var page = pages[pi];
-          var rawH = Math.ceil(page.getBoundingClientRect().height);
+        // Strip min-height from .pg elements so natural content height drives measurements
+        var pgEls = Array.from(document.querySelectorAll('.pg'));
+        var savedMinHeights = pgEls.map(function(el) { return el.style.minHeight; });
+        pgEls.forEach(function(el) { el.style.minHeight = '0'; });
 
-          // Only slice into multiple pages if content genuinely overflows one page.
-          // For sections <= pdfH, emit a single page sized to the content height so
-          // there is no trailing whitespace. For taller sections, pad up to the next
-          // pdfH multiple so slices divide evenly, then slice.
-          var captureH, totalSlices;
-          if (rawH <= pdfH) {
-            captureH = rawH;
-            totalSlices = 1;
+        for (var pi = 0; pi < sections.length; pi++) {
+          var section = sections[pi];
+          var naturalH = Math.ceil(section.getBoundingClientRect().height);
+
+          // Collect discrete blocks for element-aware page binning.
+          // Use direct children of .pg-body; fall back to the whole section.
+          var bodyEl = section.querySelector('.pg-body');
+          var blocks = bodyEl
+            ? Array.from(bodyEl.children)
+            : [section];
+
+          // Greedy-bin blocks into pages. Each bin is a slice of the full section canvas.
+          // We accumulate blocks until adding the next would exceed pdfH, then start a new bin.
+          // Each bin records {startY, endY} relative to the section top.
+          var sectionTop = section.getBoundingClientRect().top;
+          var headerEl = section.querySelector('.pg-hdr');
+          var ruleEl = section.querySelector('.pg-rule');
+          var footerEl = section.querySelector('.pg-foot');
+          var headerH = headerEl ? Math.ceil(headerEl.getBoundingClientRect().height) : 0;
+          var ruleH = ruleEl ? Math.ceil(ruleEl.getBoundingClientRect().height) : 0;
+          var footerH = footerEl ? Math.ceil(footerEl.getBoundingClientRect().height) : 0;
+          var fixedH = headerH + ruleH; // repeated at top of each page slice
+
+          var bins = [];
+          if (blocks.length === 0 || naturalH <= pdfH) {
+            // Single page: no binning needed
+            bins.push({ startY: 0, endY: naturalH });
           } else {
-            var remainder = rawH % pdfH;
-            captureH = remainder > 0 ? rawH + (pdfH - remainder) : rawH;
-            page.style.paddingBottom = (captureH - rawH) + 'px';
-            totalSlices = Math.round(captureH / pdfH);
+            var cursor = fixedH; // start after the header
+            var binStart = 0;
+            var availH = pdfH - fixedH - footerH;
+
+            for (var bi = 0; bi < blocks.length; bi++) {
+              var block = blocks[bi];
+              var blockRect = block.getBoundingClientRect();
+              var blockTop = Math.round(blockRect.top - sectionTop);
+              var blockH = Math.ceil(blockRect.height);
+
+              if (bi > 0 && cursor + blockH > pdfH - footerH && cursor > fixedH) {
+                // This block doesn't fit — close current bin, start new one
+                bins.push({ startY: binStart, endY: blockTop });
+                binStart = blockTop;
+                cursor = fixedH + blockH;
+              } else {
+                cursor += blockH;
+              }
+            }
+            // Close final bin
+            bins.push({ startY: binStart, endY: naturalH });
           }
 
-          var canvas = await html2canvas(page, {
+          // Render full section at natural height (no artificial padding)
+          var captureH = naturalH;
+          if (bins.length > 1) {
+            // Pad to a multiple of pdfH so slice arithmetic works cleanly
+            var rem = captureH % pdfH;
+            if (rem > 0) {
+              captureH = captureH + (pdfH - rem);
+              section.style.paddingBottom = (captureH - naturalH) + 'px';
+            }
+          }
+
+          var sectionCanvas = await html2canvas(section, {
             scale: 2,
             width: pdfW,
             height: captureH,
@@ -1193,27 +1241,39 @@ export function generateReportHTML(data: ReportData, meta?: { shareUrl?: string;
             backgroundColor: '#ffffff'
           });
 
-          for (var i = 0; i < totalSlices; i++) {
-            var pageH = totalSlices === 1 ? rawH : pdfH;
-            if (!isFirstPage) {
-              pdf.addPage([pdfW, pageH]);
-            }
+          if (bins.length === 1) {
+            // Single page — size the PDF page to content height (no blank space)
+            var pageH = naturalH;
+            if (!isFirstPage) pdf.addPage([pdfW, pageH]);
             isFirstPage = false;
-
-            var sliceCanvas = document.createElement('canvas');
-            sliceCanvas.width = pdfW * 2;
-            sliceCanvas.height = pageH * 2;
-            var ctx = sliceCanvas.getContext('2d');
-            ctx.fillStyle = '#ffffff';
-            ctx.fillRect(0, 0, sliceCanvas.width, sliceCanvas.height);
-            ctx.drawImage(canvas, 0, -(i * pdfH * 2));
-
-            var imgData = sliceCanvas.toDataURL('image/jpeg', 0.95);
-            pdf.addImage(imgData, 'JPEG', 0, 0, pdfW, pageH);
+            var sc = document.createElement('canvas');
+            sc.width = pdfW * 2; sc.height = pageH * 2;
+            var ctx = sc.getContext('2d');
+            ctx.fillStyle = '#ffffff'; ctx.fillRect(0, 0, sc.width, sc.height);
+            ctx.drawImage(sectionCanvas, 0, 0);
+            pdf.addImage(sc.toDataURL('image/jpeg', 0.95), 'JPEG', 0, 0, pdfW, pageH);
+          } else {
+            // Multi-page: emit one PDF page per bin
+            for (var si = 0; si < bins.length; si++) {
+              var bin = bins[si];
+              var sliceH = bin.endY - bin.startY;
+              var pageH2 = Math.min(sliceH, pdfH);
+              if (!isFirstPage) pdf.addPage([pdfW, pageH2]);
+              isFirstPage = false;
+              var sc2 = document.createElement('canvas');
+              sc2.width = pdfW * 2; sc2.height = pageH2 * 2;
+              var ctx2 = sc2.getContext('2d');
+              ctx2.fillStyle = '#ffffff'; ctx2.fillRect(0, 0, sc2.width, sc2.height);
+              ctx2.drawImage(sectionCanvas, 0, -(bin.startY * 2));
+              pdf.addImage(sc2.toDataURL('image/jpeg', 0.95), 'JPEG', 0, 0, pdfW, pageH2);
+            }
           }
 
-          if (rawH > pdfH) page.style.paddingBottom = '';
+          if (bins.length > 1) section.style.paddingBottom = '';
         }
+
+        // Restore min-heights
+        pgEls.forEach(function(el, i) { el.style.minHeight = savedMinHeights[i]; });
 
         var slug = filename.replace(/^PercIQ-/, '').replace(/\.pdf$/, '');
         pdf.save('PercIQ-' + slug + '.pdf');
