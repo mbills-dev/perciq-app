@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { supabase } from '../lib/supabase';
 import type { UserProfile, PlanTier } from '../types/database';
-import { PLAN_LIMITS } from '../types/database';
+import { PLAN_LIMITS, TRIAL_ANALYSIS_LIMIT } from '../types/database';
 import type { User } from '@supabase/supabase-js';
 import {
   User as UserIcon, CreditCard, Lock, Building2,
@@ -289,6 +289,9 @@ export default function SettingsPage({ user, initialTab }: Props) {
   const analysesUsed = stripeData?.monthly_analyses_used ?? profile?.monthly_analyses_used ?? 0;
   const analysesLimit = PLAN_LIMITS[activePlan];
   const isPaid = activePlan !== 'free';
+  const isTrial = subStatus === 'trialing';
+  // While trialing, the enforced cap is TRIAL_ANALYSIS_LIMIT regardless of plan
+  const displayLimit = isTrial ? TRIAL_ANALYSIS_LIMIT : analysesLimit;
 
   const statusColor = subStatus === 'active' || subStatus === 'trialing'
     ? { bg: 'bg-emerald-500/15', text: 'text-emerald-400', border: 'border-emerald-500/25' }
@@ -491,26 +494,39 @@ export default function SettingsPage({ user, initialTab }: Props) {
                     <span className={`text-sm ${cancelAtPeriodEnd ? 'text-amber-400' : 'text-white/70'}`}>{renewalFormatted ?? '—'}</span>
                   </div>
                   <div className="flex items-center justify-between py-3">
-                    <span className="text-sm text-white/50">Analyses this month</span>
+                    <span className="text-sm text-white/50">
+                      {isTrial ? 'Trial analyses used' : 'Analyses this month'}
+                    </span>
                     <span className="text-sm font-semibold text-white">
-                      {analysesUsed} / {analysesLimit === null ? '∞' : analysesLimit}
+                      {analysesUsed} / {displayLimit === null ? '∞' : displayLimit}
+                      {isTrial && (
+                        <span className="ml-1.5 text-xs font-normal text-white/35">trial</span>
+                      )}
                     </span>
                   </div>
                 </div>
 
                 {/* Usage bar */}
-                {analysesLimit !== null && (
+                {displayLimit !== null && (
                   <div className="mb-5">
                     <div className="h-1.5 bg-white/8 rounded-full overflow-hidden">
                       <div
                         className="h-full rounded-full transition-all duration-500"
                         style={{
-                          width: `${Math.min(100, (analysesUsed / analysesLimit) * 100)}%`,
-                          background: analysesUsed >= analysesLimit ? '#EF4444' : analysesUsed >= analysesLimit * 0.8 ? '#F59E0B' : '#22C55E',
+                          width: `${Math.min(100, (analysesUsed / displayLimit) * 100)}%`,
+                          background: analysesUsed >= displayLimit ? '#EF4444' : analysesUsed >= displayLimit * 0.8 ? '#F59E0B' : '#22C55E',
                         }}
                       />
                     </div>
                   </div>
+                )}
+
+                {/* Trial conversion note */}
+                {isTrial && analysesLimit !== null && (
+                  <p className="text-xs text-white/35 mb-5 leading-relaxed">
+                    Your full <span className="text-white/60 capitalize">{activePlan}</span> allowance of <span className="text-white/60">{analysesLimit} analyses/month</span> unlocks when your trial converts
+                    {renewalFormatted ? ` on ${renewalFormatted}` : ''}.
+                  </p>
                 )}
 
                 <div className="flex gap-3">

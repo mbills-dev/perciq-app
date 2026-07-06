@@ -1,7 +1,7 @@
 import { useEffect, useState, useRef } from 'react';
 import { supabase } from '../lib/supabase';
 import type { Parcel, Report, PlanTier } from '../types/database';
-import { PLAN_LIMITS } from '../types/database';
+import { PLAN_LIMITS, TRIAL_ANALYSIS_LIMIT } from '../types/database';
 import {
   Plus, Search, Trash2, Map as MapIcon, ChevronDown, ChevronUp,
   AlertCircle, Loader2, ArrowRight, X, CheckCircle2, Zap,
@@ -715,6 +715,7 @@ export default function Dashboard({ onViewReport, onCreateReport, onNavigateSett
   const [showLimitModal, setShowLimitModal] = useState(false);
   const [showTrialLimitModal, setShowTrialLimitModal] = useState(false);
   const [userPlan, setUserPlan] = useState<PlanTier>('free');
+  const [subscriptionStatus, setSubscriptionStatus] = useState<string | null>(null);
   const [analysesUsed, setAnalysesUsed] = useState(0);
   const [planRenewalDate, setPlanRenewalDate] = useState<string | null>(null);
 
@@ -760,15 +761,21 @@ export default function Dashboard({ onViewReport, onCreateReport, onNavigateSett
     if (data) {
       const plan = (data.plan ?? 'free') as PlanTier;
       setUserPlan(plan);
+      setSubscriptionStatus(data.subscription_status ?? null);
       setAnalysesUsed(data.monthly_analyses_used ?? 0);
       setPlanRenewalDate(data.plan_renewal_date ?? null);
     }
   }
 
   async function handleAddParcel() {
-    const limit = PLAN_LIMITS[userPlan];
+    const isTrial = subscriptionStatus === 'trialing';
+    const limit = isTrial ? TRIAL_ANALYSIS_LIMIT : PLAN_LIMITS[userPlan];
     if (limit !== null && analysesUsed >= limit) {
-      setShowLimitModal(true);
+      if (isTrial) {
+        setShowTrialLimitModal(true);
+      } else {
+        setShowLimitModal(true);
+      }
       return;
     }
     // Call server-side increment before opening the modal — blocks if limit reached
@@ -1386,8 +1393,8 @@ export default function Dashboard({ onViewReport, onCreateReport, onNavigateSett
             </h3>
             <p style={{ fontSize: 14, color: 'rgba(255,255,255,0.45)', lineHeight: 1.6, marginBottom: 24 }}>
               {planRenewalDate
-                ? `You've used all 3 trial analyses. Your full plan unlocks when your trial converts on ${new Date(planRenewalDate).toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' })} — or upgrade now to start immediately.`
-                : `You've used all 3 trial analyses. Upgrade now to unlock your full plan immediately.`}
+                ? `You've used all ${TRIAL_ANALYSIS_LIMIT} trial analyses. Your full plan unlocks when your trial converts on ${new Date(planRenewalDate).toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' })} — or upgrade now to start immediately.`
+                : `You've used all ${TRIAL_ANALYSIS_LIMIT} trial analyses. Upgrade now to unlock your full plan immediately.`}
             </p>
             <div style={{ display: 'flex', gap: 10 }}>
               <button

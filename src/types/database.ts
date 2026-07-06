@@ -136,6 +136,8 @@ export const PLAN_LIMITS: Record<PlanTier, number | null> = {
   unlimited: null,
 };
 
+export const TRIAL_ANALYSIS_LIMIT = 3;
+
 export interface NearbyTest {
   id: string;
   county: string | null;
