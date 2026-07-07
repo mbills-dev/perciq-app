@@ -4247,6 +4247,9 @@ export default function ReportDetail({ reportId, onBack, isPublic = false }: Rep
   const isFetchingBoundaryRef = useRef(false);
   const parcelComplexRef = useRef(false);
   const requestCaptureRef = useRef<(() => Promise<HTMLCanvasElement>) | null>(null);
+  // Tracks the in-flight storage upload so handleDownloadReport can await it.
+  const snapshotUploadRef = useRef<Promise<string | null>>(Promise.resolve(null));
+  const mapSnapshotUrlRef = useRef<string | null>(null);
 
   const loadReport = useCallback(async () => {
     const [{ data: rep }, { data: soil }] = await Promise.all([
@@ -4255,6 +4258,8 @@ export default function ReportDetail({ reportId, onBack, isPublic = false }: Rep
     ]);
     const r = rep as Report | null;
     setReport(r);
+    // Seed the URL ref from the stored value so buildReportData can use it immediately.
+    if (r?.map_snapshot_url) mapSnapshotUrlRef.current = r.map_snapshot_url;
     setSoilResults((soil as SoilResult[]) ?? []);
     if (r?.parcels?.state && r.parcels.county) {
       const { data: rule } = await supabase.from('county_rules').select('*')
@@ -4725,6 +4730,31 @@ export default function ReportDetail({ reportId, onBack, isPublic = false }: Rep
     return { zoneScore, parcelScore };
   }, [report, scoreResult, mapSoilPolygons, envCoverage]);
 
+  // ── Upload composited canvas to Supabase Storage and persist URL ──
+  // Returns the public URL, or null on failure. Designed to be called from onCanvasReady
+  // so uploads happen automatically on every fresh capture (initial load + re-runs).
+  const uploadSnapshot = useCallback((canvas: HTMLCanvasElement): Promise<string | null> => {
+    return new Promise((resolve) => {
+      canvas.toBlob(async (blob) => {
+        if (!blob) { resolve(null); return; }
+        const path = `${reportId}.jpg`;
+        const { error: uploadError } = await supabase.storage
+          .from('report-maps')
+          .upload(path, blob, { contentType: 'image/jpeg', upsert: true });
+        if (uploadError) {
+          console.warn('[map] snapshot upload failed:', uploadError.message);
+          resolve(null);
+          return;
+        }
+        const { data: { publicUrl } } = supabase.storage.from('report-maps').getPublicUrl(path);
+        mapSnapshotUrlRef.current = publicUrl;
+        // Persist the URL to the reports row so the public page and PDF route can use it.
+        await supabase.from('reports').update({ map_snapshot_url: publicUrl }).eq('id', reportId);
+        resolve(publicUrl);
+      }, 'image/jpeg', 0.92);
+    });
+  }, [reportId]);
+
   // ── Build report data object (shared between download and preview) ──
   const buildReportData = useCallback((overrideMapImage?: string | null) => {
     const _parcel = report?.parcels;
@@ -4797,6 +4827,7 @@ export default function ReportDetail({ reportId, onBack, isPublic = false }: Rep
       topZones,
       percPins: percPinsRef.current,
       mapImageBase64,
+      mapImageUrl: mapSnapshotUrlRef.current ?? null,
       mapImageWidth: mapCanvasRef.current?.width ?? null,
       mapImageHeight: mapCanvasRef.current?.height ?? null,
     };
@@ -4811,10 +4842,16 @@ export default function ReportDetail({ reportId, onBack, isPublic = false }: Rep
         freshSnapshot = canvas.toDataURL('image/jpeg', 0.92);
         mapSnapshotRef.current = freshSnapshot;
         mapCanvasRef.current = canvas;
+        // onCanvasReady already kicked off the upload; re-assign so we await the latest one.
+        snapshotUploadRef.current = uploadSnapshot(canvas);
       } catch (e) {
         console.warn('[report] fresh capture failed, falling back to cached snapshot:', e);
       }
     }
+
+    // Await the storage upload so map_snapshot_url is written before we navigate.
+    // If the upload fails we still proceed — the base64 in the HTML is the fallback.
+    await snapshotUploadRef.current.catch(() => null);
 
     const reportData = buildReportData(freshSnapshot);
     const shareUrl = (() => {
@@ -5721,6 +5758,8 @@ export default function ReportDetail({ reportId, onBack, isPublic = false }: Rep
               } catch (e) {
                 console.warn('[map] composited snapshot failed:', e);
               }
+              // Upload to Supabase Storage; store the Promise so "View Report" can await it.
+              snapshotUploadRef.current = uploadSnapshot(canvas);
             }}
             onBestZoneInFlood={setBestZoneInFloodWarning}
             onPercFallback={(exhausted) => setPercFallbackWarning(exhausted ? 'exhausted' : 'expanded')}

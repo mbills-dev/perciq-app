@@ -1,0 +1,1 @@
+ALTER TABLE reports ADD COLUMN IF NOT EXISTS map_snapshot_url text DEFAULT NULL;

@@ -54,6 +54,7 @@ export interface ReportData {
   topZones: ZoneData[];
   percPins: PercPinData[];
   mapImageBase64: string | null;
+  mapImageUrl?: string | null;
   mapImageWidth?: number | null;
   mapImageHeight?: number | null;
 }
@@ -288,17 +289,20 @@ function buildAssessmentText(data: ReportData): string {
 
 // ── Map slot ──────────────────────────────────────────────────────────────────
 
-function buildMapSlot(base64: string | null, address: string, imgW?: number | null, imgH?: number | null): string {
+function buildMapSlot(base64: string | null, address: string, imgW?: number | null, imgH?: number | null, imgUrl?: string | null): string {
+  // Prefer a persisted public URL over an in-memory base64 string.
+  const imgSrc = imgUrl ?? base64;
+
   // Adaptive height: clamp between 300px and 480px based on captured image aspect ratio
   const SLOT_W = 712; // 816px page - 52px*2 side padding
   let slotH = 300;
-  if (base64 && imgW && imgH && imgW > 0) {
+  if (imgSrc && imgW && imgH && imgW > 0) {
     slotH = Math.min(480, Math.max(300, Math.round(SLOT_W * imgH / imgW)));
   }
-  const heightStyle = base64 ? `height:${slotH}px` : 'height:222px';
+  const heightStyle = imgSrc ? `height:${slotH}px` : 'height:222px';
 
-  const imgContent = base64
-    ? `<img src="${base64}" style="position:absolute;inset:0;width:100%;height:100%;object-fit:contain;background:#0a0f1e;border-radius:12px" alt="Parcel map" />`
+  const imgContent = imgSrc
+    ? `<img src="${imgSrc}" style="position:absolute;inset:0;width:100%;height:100%;object-fit:contain;background:#0a0f1e;border-radius:12px" alt="Parcel map" />`
     : `<div class="ms-icon"><svg viewBox="0 0 36 36" fill="none"><rect width="36" height="36" rx="8" fill="#22C55E" fill-opacity="0.3"/><path d="M18 8L28 13V23L18 28L8 23V13L18 8Z" stroke="#16a34a" stroke-width="1.5"/><circle cx="18" cy="18" r="3" fill="#16a34a" fill-opacity="0.7"/></svg></div>
       <div class="ms-lbl">Parcel Map &amp; Soil Zones</div>
       <div class="ms-sub">Map image not available</div>`;
@@ -895,7 +899,7 @@ export function generateReportHTML(data: ReportData, meta?: { shareUrl?: string;
   const wetFill = (Math.min(100, data.wetlandPct) / 100) * circumference;
 
   const assessmentText = buildAssessmentText(data);
-  const mapSlotHtml = buildMapSlot(data.mapImageBase64, data.address, data.mapImageWidth, data.mapImageHeight);
+  const mapSlotHtml = buildMapSlot(data.mapImageBase64, data.address, data.mapImageWidth, data.mapImageHeight, data.mapImageUrl);
   const seriesRows = buildSeriesRows(data.soilSeries);
   const zoneCardsHtml = buildZoneCards(data.topZones);
   const pinCardsHtml = buildPinCards(data.percPins);

@@ -189,15 +189,17 @@ export default function PublicReportPage({ reportId }: PublicReportPageProps) {
 
       if (!rep) { setNotFound(true); setLoading(false); return; }
 
-      const report = rep as Report & { report_data?: ReportData | null };
+      const report = rep as Report & { report_data?: ReportData | null; map_snapshot_url?: string | null };
+      const mapSnapshotUrl = report.map_snapshot_url ?? null;
 
       let reportData: ReportData;
 
       if (report.report_data) {
-        // Use the exact ReportData saved when the authenticated user generated the PDF.
+        // Use the exact ReportData saved when the authenticated user generated the report.
         reportData = {
           ...report.report_data,
           mapImageBase64: null,
+          mapImageUrl: mapSnapshotUrl,
         };
       } else {
         // report_data not yet written — fall back to reconstructing from stored DB fields.
@@ -206,7 +208,10 @@ export default function PublicReportPage({ reportId }: PublicReportPageProps) {
           .select('*')
           .eq('report_id', reportId)
           .order('pct_coverage', { ascending: false });
-        reportData = buildFallbackReportData(report, (soil as SoilResult[]) ?? []);
+        reportData = {
+          ...buildFallbackReportData(report, (soil as SoilResult[]) ?? []),
+          mapImageUrl: mapSnapshotUrl,
+        };
       }
 
       setAddress(reportData.address);
