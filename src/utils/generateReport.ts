@@ -77,6 +77,25 @@ interface StateRegulatoryConfig {
   dataConfidenceBody: (county: string) => string;
 }
 
+// Full state names keyed by two-letter code for use in regulatory copy.
+const STATE_NAMES: Record<string, string> = {
+  AL: 'Alabama', AK: 'Alaska', AZ: 'Arizona', AR: 'Arkansas', CA: 'California',
+  CO: 'Colorado', CT: 'Connecticut', DE: 'Delaware', FL: 'Florida', GA: 'Georgia',
+  HI: 'Hawaii', ID: 'Idaho', IL: 'Illinois', IN: 'Indiana', IA: 'Iowa',
+  KS: 'Kansas', KY: 'Kentucky', LA: 'Louisiana', ME: 'Maine', MD: 'Maryland',
+  MA: 'Massachusetts', MI: 'Michigan', MN: 'Minnesota', MS: 'Mississippi', MO: 'Missouri',
+  MT: 'Montana', NE: 'Nebraska', NV: 'Nevada', NH: 'New Hampshire', NJ: 'New Jersey',
+  NM: 'New Mexico', NY: 'New York', NC: 'North Carolina', ND: 'North Dakota', OH: 'Ohio',
+  OK: 'Oklahoma', OR: 'Oregon', PA: 'Pennsylvania', RI: 'Rhode Island', SC: 'South Carolina',
+  SD: 'South Dakota', TN: 'Tennessee', TX: 'Texas', UT: 'Utah', VT: 'Vermont',
+  VA: 'Virginia', WA: 'Washington', WV: 'West Virginia', WI: 'Wisconsin', WY: 'Wyoming',
+  DC: 'Washington D.C.',
+};
+
+function stateFullName(code: string): string {
+  return STATE_NAMES[code.toUpperCase()] ?? code;
+}
+
 const STATE_REGULATORY_COPY: Record<string, StateRegulatoryConfig> = {
   NC: {
     countyRulesBody: (county) =>
@@ -92,13 +111,13 @@ const STATE_REGULATORY_COPY: Record<string, StateRegulatoryConfig> = {
   },
   DEFAULT: {
     countyRulesBody: (county, state) =>
-      `${county} County septic permitting is administered under ${state}\u2019s environmental health regulations. A licensed site evaluation is required before any permit is issued in most jurisdictions. Typical timeline: 4\u20138 weeks. No local perc test history is currently in the PercIQ database for this area.`,
+      `${county} County septic permitting is administered under ${stateFullName(state)}\u2019s environmental health regulations. A licensed site evaluation is required before any permit is issued in most jurisdictions. Typical timeline: 4\u20138 weeks. No local perc test history is currently in the PercIQ database for this area.`,
     wetlandBody: (pct) =>
       `<b>Wetland coverage of ${pct.toFixed(0)}%.</b> Most states require setbacks from wetland boundaries (commonly 25\u2013100 feet). Review your state and county requirements before planning perc test placement.`,
     systemTypeBody: () =>
       `<b>Conventional system appears likely.</b> The top zone profile is consistent with conventional septic system criteria in most jurisdictions. Your local health department determines the approved system type.`,
     slopeBody: (isGood) =>
-      `<b>${isGood ? 'Best zones have favorable slope.' : 'Slope conditions may be a factor.'}</b> The scored zones show gradients evaluated against common state environmental health standards. Slopes above 15% typically require engineered alternatives.`,
+      `<b>${isGood ? 'Best zones have favorable slope.' : 'Slope conditions may be a factor.'}</b> The scored zones show gradients evaluated against common state environmental health standards. Slopes above 15% typically require engineered alternatives that add cost and time.`,
     dataConfidenceBody: (county) =>
       `This analysis is Tier 1 \u2014 based on USDA SSURGO federal soil survey data only. No local ${county} County perc test records are currently in the PercIQ database for this area. Scores are directional indicators. A licensed site evaluation is required before any permit application.`,
   },
@@ -298,6 +317,12 @@ function buildZoneCards(zones: ZoneData[]): string {
 
 // ── Pin cards ─────────────────────────────────────────────────────────────────
 
+function pinScoreLabel(score: number): string {
+  if (score >= 65) return 'Viable';
+  if (score >= 35) return 'Engineering Needed';
+  return 'Not Suitable';
+}
+
 function buildPinCards(pins: PercPinData[]): string {
   if (pins.length === 0) return '<p style="color:var(--slate);text-align:center;padding:20px 0;grid-column:1/-1;">No perc test sites calculated.</p>';
   return pins.slice(0, 3).map(p => {
@@ -306,13 +331,15 @@ function buildPinCards(pins: PercPinData[]): string {
     const bw = confBarWidth(p.confidence);
     const bc = confBarClass(p.confidence);
     const vc = confValClass(p.confidence);
-    const verdictLabel = zoneVerdictText(p.zoneScore).replace(' \u2713', '');
+    const verdictLabel = pinScoreLabel(p.zoneScore);
+    // Omit the series suffix when it is purely numeric or absent (Regrid sometimes returns the mukey as the series code).
+    const seriesSuffix = p.zoneSeries && /\D/.test(p.zoneSeries) ? ` \u2014 ${p.zoneSeries}` : '';
     return `
       <div class="pin-card">
         <div class="pc-head"><div class="pc-num ${numClass}">${p.rank}</div><span class="pc-lbl">${siteLabel}</span></div>
         <div class="pc-body">
           <div class="pc-row"><div class="pcrl">Coordinates</div><div class="pcrv">${p.lat}\u00b0N, ${p.lng}\u00b0W</div></div>
-          <div class="pc-row"><div class="pcrl">Soil Zone</div><div class="pcrv">${p.zoneName}${p.zoneSeries ? ' \u2014 ' + p.zoneSeries : ''}</div><div class="pcrs">Score ${p.zoneScore} \u00b7 ${verdictLabel}</div></div>
+          <div class="pc-row"><div class="pcrl">Soil Zone</div><div class="pcrv">${p.zoneName}${seriesSuffix}</div><div class="pcrs">Score ${p.zoneScore} \u00b7 ${verdictLabel}</div></div>
           <div class="pc-row"><div class="pcrl">Edge Setback</div><div class="pcrv">${p.edgeDist}</div></div>
           <div class="conf-row"><span class="cr-lbl">Confidence</span><div class="cr-trk"><div class="cr-fill ${bc}" style="width:${bw}"></div></div><span class="cr-val ${vc}">${p.confidence}</span></div>
         </div>
@@ -1137,7 +1164,7 @@ export function generateReportHTML(data: ReportData, meta?: { shareUrl?: string;
         <div class="rc-bar ${data.bestZoneScore >= 45 ? 'rcb-g' : 'rcb-a'}"></div>
         <div class="rc-inner">
           <div class="rc-top"><div class="rc-tl"><div class="rc-dot ${data.bestZoneScore >= 45 ? 'rcd-g' : 'rcd-a'}"></div><div class="rc-title">Slope Conditions</div></div><div class="rc-metric ${data.bestZoneScore >= 70 ? 'rcm-g' : 'rcm-a'}">${data.bestZoneScore >= 70 ? 'Good' : 'Mod.'}</div></div>
-          <div class="rc-body">${stateCopy.slopeBody(data.bestZoneScore >= 70)} Slopes above 15% typically require engineered alternatives that add cost and time.</div>
+          <div class="rc-body">${stateCopy.slopeBody(data.bestZoneScore >= 70)}</div>
           <div class="rc-verdict ${data.bestZoneScore >= 70 ? 'rcv-g' : 'rcv-a'}">${data.bestZoneScore >= 70 ? '\u2713 Within standard approval range' : '\u26a0 Verify slope during site evaluation'}</div>
         </div>
       </div>
