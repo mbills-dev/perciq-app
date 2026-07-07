@@ -1,5 +1,6 @@
 import { useEffect, useState, useRef } from 'react';
 import { supabase } from '../lib/supabase';
+import { toTitleCase } from '../utils/generateReport';
 import type { Parcel, Report, PlanTier } from '../types/database';
 import { PLAN_LIMITS, TRIAL_ANALYSIS_LIMIT } from '../types/database';
 import {
@@ -126,7 +127,7 @@ function ExpandedDetail({ row }: { row: ParcelRow }) {
     { label: 'Flood coverage', value: flood, border: floodStyle.border, valueColor: floodStyle.value },
     { label: 'Wetland coverage', value: wetland, border: wetlandStyle.border, valueColor: wetlandStyle.value },
     { label: 'Soil types', value: row.soilTypeCount > 0 ? `${row.soilTypeCount} types` : '—', border: defaultStyle.border, valueColor: defaultStyle.value },
-    { label: 'County', value: parcel.county ?? '—', border: defaultStyle.border, valueColor: defaultStyle.value },
+    { label: 'County', value: toTitleCase(parcel.county) || '—', border: defaultStyle.border, valueColor: defaultStyle.value },
     { label: 'APN', value: parcel.apn ?? '—', border: defaultStyle.border, valueColor: defaultStyle.value },
     { label: 'Added', value: new Date(parcel.created_at).toLocaleDateString(), border: defaultStyle.border, valueColor: defaultStyle.value },
   ];
@@ -676,7 +677,7 @@ function AddParcelModal({
                       {r.address ?? r.apn ?? 'Unknown'}
                     </p>
                     <p style={{ fontSize: 11, color: 'rgba(255,255,255,0.35)', marginTop: 2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                      {[r.owner, r.county, r.acreage != null ? `${r.acreage.toFixed(1)} ac` : null].filter(Boolean).join(' · ')}
+                      {[r.owner, toTitleCase(r.county), r.acreage != null ? `${r.acreage.toFixed(1)} ac` : null].filter(Boolean).join(' · ')}
                     </p>
                   </div>
                   <button
@@ -1191,7 +1192,7 @@ export default function Dashboard({ onViewReport, onCreateReport, onNavigateSett
                       <p style={{ fontSize: 11, color: 'rgba(255,255,255,0.35)', marginTop: 2, lineHeight: 1.3 }}>
                         {[
                           parcel.acreage != null ? `${parcel.acreage.toFixed(1)} ac` : null,
-                          parcel.county ? `${parcel.county} Co.` : null,
+                          parcel.county ? `${toTitleCase(parcel.county)} Co.` : null,
                           parcel.owner,
                           new Date(parcel.created_at).toLocaleDateString(),
                         ].filter(Boolean).join(' · ')}

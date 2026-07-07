@@ -59,6 +59,55 @@ export interface ReportData {
   mapImageHeight?: number | null;
 }
 
+// ── Title-case utility ────────────────────────────────────────────────────────
+
+// Converts "hoke" → "Hoke", "new hanover" → "New Hanover", already-cased strings unchanged.
+export function toTitleCase(s: string | null | undefined): string {
+  if (!s) return '';
+  return s.replace(/\w\S*/g, w => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase());
+}
+
+// ── State-aware regulatory copy ───────────────────────────────────────────────
+
+interface StateRegulatoryConfig {
+  countyRulesBody: (county: string, state: string) => string;
+  wetlandBody: (pct: number) => string;
+  systemTypeBody: (score: number) => string;
+  slopeBody: (isGood: boolean) => string;
+  dataConfidenceBody: (county: string) => string;
+}
+
+const STATE_REGULATORY_COPY: Record<string, StateRegulatoryConfig> = {
+  NC: {
+    countyRulesBody: (county) =>
+      `${county} County follows NC DENR Rule 15A NCAC 18A .1900. A licensed soil scientist must complete a site evaluation before any permit is issued. Typical timeline: 4\u20138 weeks. No local perc test history is currently in the PercIQ database for this area.`,
+    wetlandBody: (pct) =>
+      `<b>Wetland coverage of ${pct.toFixed(0)}%.</b> NC requires a 50-foot setback from wetlands. Review which zones are affected before planning perc test placement.`,
+    systemTypeBody: () =>
+      `<b>Conventional system appears likely.</b> The top zone profile aligns with NC criteria for Type I or Type II conventional septic. Engineering alternatives are not anticipated for the best zones.`,
+    slopeBody: (isGood) =>
+      `<b>${isGood ? 'Best zones have favorable slope.' : 'Slope conditions may be a factor.'}</b> The scored zones show gradients evaluated for NC Environmental Health approval. Slopes above 15% require engineered alternatives that add cost and time.`,
+    dataConfidenceBody: (county) =>
+      `This analysis is Tier 1 \u2014 based on USDA SSURGO federal soil survey data only. No local ${county} County Environmental Health perc test records are currently in the PercIQ database for this area. Scores are directional indicators. A licensed site evaluation is required before any permit application.`,
+  },
+  DEFAULT: {
+    countyRulesBody: (county, state) =>
+      `${county} County septic permitting is administered under ${state}\u2019s environmental health regulations. A licensed site evaluation is required before any permit is issued in most jurisdictions. Typical timeline: 4\u20138 weeks. No local perc test history is currently in the PercIQ database for this area.`,
+    wetlandBody: (pct) =>
+      `<b>Wetland coverage of ${pct.toFixed(0)}%.</b> Most states require setbacks from wetland boundaries (commonly 25\u2013100 feet). Review your state and county requirements before planning perc test placement.`,
+    systemTypeBody: () =>
+      `<b>Conventional system appears likely.</b> The top zone profile is consistent with conventional septic system criteria in most jurisdictions. Your local health department determines the approved system type.`,
+    slopeBody: (isGood) =>
+      `<b>${isGood ? 'Best zones have favorable slope.' : 'Slope conditions may be a factor.'}</b> The scored zones show gradients evaluated against common state environmental health standards. Slopes above 15% typically require engineered alternatives.`,
+    dataConfidenceBody: (county) =>
+      `This analysis is Tier 1 \u2014 based on USDA SSURGO federal soil survey data only. No local ${county} County perc test records are currently in the PercIQ database for this area. Scores are directional indicators. A licensed site evaluation is required before any permit application.`,
+  },
+};
+
+function getStateCopy(state: string): StateRegulatoryConfig {
+  return STATE_REGULATORY_COPY[state.toUpperCase()] ?? STATE_REGULATORY_COPY['DEFAULT'];
+}
+
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 function scoreColor(score: number): string {
@@ -345,9 +394,10 @@ function wetlandRiskCard(data: ReportData): string {
   const metricClass = isGood ? 'rcm-g' : 'rcm-a';
   const verdictClass = isGood ? 'rcv-g' : 'rcv-a';
   const verdictText = isGood ? '\u2713 Minimal wetland presence' : '\u26a0 Minor \u2014 setback review recommended';
+  const copy = getStateCopy(data.state);
   const bodyText = isGood
     ? `<b>Minimal wetland presence.</b> No significant NWI-mapped wetland boundaries overlap primary viable zones. Standard permitting process likely applies.`
-    : `<b>Wetland coverage of ${pct.toFixed(0)}%.</b> NC requires a 50-foot setback from wetlands. Review which zones are affected before planning perc test placement.`;
+    : copy.wetlandBody(pct);
   return `
       <div class="risk-card">
         <div class="rc-bar ${barClass}"></div>
@@ -367,8 +417,9 @@ function systemTypeCard(data: ReportData): string {
   const metricClass = isGood ? 'rcm-g' : 'rcm-a';
   const verdictClass = isGood ? 'rcv-g' : 'rcv-a';
   const metricText = isGood ? 'Conv.' : 'Eng.';
+  const copy = getStateCopy(data.state);
   const bodyText = isGood
-    ? `<b>Conventional system appears likely.</b> The top zone profile aligns with NC criteria for Type I or Type II conventional septic. Engineering alternatives are not anticipated for the best zones.`
+    ? copy.systemTypeBody(score)
     : `<b>Engineered alternative may be required.</b> Best zone score of ${score} suggests that a conventional system may not be sufficient. A licensed evaluation will determine the appropriate system type.`;
   const verdictText = isGood ? '\u2713 Likely qualifies for conventional system' : '\u26a0 Engineering alternative may be needed';
   return `
@@ -898,13 +949,19 @@ export function generateReportHTML(data: ReportData, meta?: { shareUrl?: string;
   const wetColor = wetlandGaugeColor(data.wetlandPct);
   const wetFill = (Math.min(100, data.wetlandPct) / 100) * circumference;
 
-  const assessmentText = buildAssessmentText(data);
-  const mapSlotHtml = buildMapSlot(data.mapImageBase64, data.address, data.mapImageWidth, data.mapImageHeight, data.mapImageUrl);
+  // Title-case county, state, and address so Regrid-sourced lowercase values ("hoke", "nc") display correctly.
+  const county = toTitleCase(data.county);
+  const state = data.state ? data.state.toUpperCase() : '';
+  const address = toTitleCase(data.address);
+  const stateCopy = getStateCopy(data.state);
+
+  const assessmentText = buildAssessmentText({ ...data, county, state, address });
+  const mapSlotHtml = buildMapSlot(data.mapImageBase64, address, data.mapImageWidth, data.mapImageHeight, data.mapImageUrl);
   const seriesRows = buildSeriesRows(data.soilSeries);
   const zoneCardsHtml = buildZoneCards(data.topZones);
   const pinCardsHtml = buildPinCards(data.percPins);
 
-  const footerAddr = `${data.address}, ${data.county} ${data.state}`;
+  const footerAddr = `${address}, ${county} ${state}`;
 
   const verdictScore = data.bestZoneScore;
   const verdictBgColor = verdictScore >= 65 ? '#22C55E' : verdictScore >= 35 ? '#FF9F09' : '#FF4539';
@@ -998,8 +1055,8 @@ export function generateReportHTML(data: ReportData, meta?: { shareUrl?: string;
 
   <div class="cov-property">
     <div>
-      <div class="cp-addr">${data.address}</div>
-      <div class="cp-meta">${data.county}, ${data.state} &nbsp;\u00b7&nbsp; ${data.acreage} acres${data.owner ? ` &nbsp;\u00b7&nbsp; Owner: ${data.owner}` : ''}</div>
+      <div class="cp-addr">${address}</div>
+      <div class="cp-meta">${county}, ${state} &nbsp;\u00b7&nbsp; ${data.acreage} acres${data.owner ? ` &nbsp;\u00b7&nbsp; Owner: ${data.owner}` : ''}</div>
     </div>
     <div class="cp-right">
       <div class="verdict-pill" style="${verdictBg}"><span class="vp-txt" style="color:#fff">${data.verdict}</span></div>
@@ -1035,7 +1092,7 @@ export function generateReportHTML(data: ReportData, meta?: { shareUrl?: string;
     <div><div class="pg-sec">Section 01</div><h2 class="pg-title">Soil Zone Breakdown</h2></div>
     <div class="pg-hdr-r">
       <div class="pg-wm"><svg viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg" width="20" height="20"><defs><filter id="ph-glow" x="-50%" y="-50%" width="200%" height="200%"><feGaussianBlur stdDeviation="2.25" result="blur"/><feColorMatrix type="matrix" values="0 0 0 0 0.129 0 0 0 0 0.773 0 0 0 0 0.369 0 0 0 0.3 0" result="colBlur"/><feMerge><feMergeNode in="colBlur"/><feMergeNode in="SourceGraphic"/></feMerge></filter></defs><g stroke="#21C55E" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" fill="none" filter="url(#ph-glow)"><path d="M 26 59 L 50 69 L 74 59"/><path d="M 26 48 L 50 58 L 74 48"/><polygon points="50,27 74,37 50,47 26,37" fill="none"/></g></svg><span class="pg-wm-name">PERC<span style="color:var(--g);font-weight:300">IQ</span></span></div>
-      <div class="pg-prop">${data.address} \u00b7 ${data.county}, ${data.state}</div>
+      <div class="pg-prop">${address} \u00b7 ${county}, ${state}</div>
     </div>
   </div>
   <div class="pg-rule"></div>
@@ -1063,7 +1120,7 @@ export function generateReportHTML(data: ReportData, meta?: { shareUrl?: string;
     <div><div class="pg-sec">Section 02</div><h2 class="pg-title">Site Risk Summary</h2></div>
     <div class="pg-hdr-r">
       <div class="pg-wm"><svg viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg" width="20" height="20"><defs><filter id="ph-glow" x="-50%" y="-50%" width="200%" height="200%"><feGaussianBlur stdDeviation="2.25" result="blur"/><feColorMatrix type="matrix" values="0 0 0 0 0.129 0 0 0 0 0.773 0 0 0 0 0.369 0 0 0 0.3 0" result="colBlur"/><feMerge><feMergeNode in="colBlur"/><feMergeNode in="SourceGraphic"/></feMerge></filter></defs><g stroke="#21C55E" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" fill="none" filter="url(#ph-glow)"><path d="M 26 59 L 50 69 L 74 59"/><path d="M 26 48 L 50 58 L 74 48"/><polygon points="50,27 74,37 50,47 26,37" fill="none"/></g></svg><span class="pg-wm-name">PERC<span style="color:var(--g);font-weight:300">IQ</span></span></div>
-      <div class="pg-prop">${data.address} \u00b7 ${data.county}, ${data.state}</div>
+      <div class="pg-prop">${address} \u00b7 ${county}, ${state}</div>
     </div>
   </div>
   <div class="pg-rule"></div>
@@ -1080,7 +1137,7 @@ export function generateReportHTML(data: ReportData, meta?: { shareUrl?: string;
         <div class="rc-bar ${data.bestZoneScore >= 45 ? 'rcb-g' : 'rcb-a'}"></div>
         <div class="rc-inner">
           <div class="rc-top"><div class="rc-tl"><div class="rc-dot ${data.bestZoneScore >= 45 ? 'rcd-g' : 'rcd-a'}"></div><div class="rc-title">Slope Conditions</div></div><div class="rc-metric ${data.bestZoneScore >= 70 ? 'rcm-g' : 'rcm-a'}">${data.bestZoneScore >= 70 ? 'Good' : 'Mod.'}</div></div>
-          <div class="rc-body"><b>${data.bestZoneScore >= 70 ? 'Best zones have favorable slope.' : 'Slope conditions may be a factor.'}</b> The scored zones show gradients evaluated for NC Environmental Health approval. Slopes above 15% require engineered alternatives that add cost and time.</div>
+          <div class="rc-body">${stateCopy.slopeBody(data.bestZoneScore >= 70)} Slopes above 15% typically require engineered alternatives that add cost and time.</div>
           <div class="rc-verdict ${data.bestZoneScore >= 70 ? 'rcv-g' : 'rcv-a'}">${data.bestZoneScore >= 70 ? '\u2713 Within standard approval range' : '\u26a0 Verify slope during site evaluation'}</div>
         </div>
       </div>
@@ -1098,8 +1155,8 @@ export function generateReportHTML(data: ReportData, meta?: { shareUrl?: string;
       <div class="risk-card">
         <div class="rc-bar rcb-n"></div>
         <div class="rc-inner">
-          <div class="rc-top"><div class="rc-tl"><div class="rc-dot rcd-n"></div><div class="rc-title">${data.county} County Rules</div></div><div class="rc-metric rcm-n">Review</div></div>
-          <div class="rc-body">${data.county} County follows NC DENR Rule 15A NCAC 18A .1900. A licensed soil scientist must complete a site evaluation before any permit is issued. Typical timeline: 4\u20138 weeks. No local perc test history is currently in the PercIQ database for this area.</div>
+          <div class="rc-top"><div class="rc-tl"><div class="rc-dot rcd-n"></div><div class="rc-title">${county} County Rules</div></div><div class="rc-metric rcm-n">Review</div></div>
+          <div class="rc-body">${stateCopy.countyRulesBody(county, state)}</div>
           <div class="rc-verdict rcv-n">\u2192 Local history not yet available</div>
         </div>
       </div>
@@ -1108,7 +1165,7 @@ export function generateReportHTML(data: ReportData, meta?: { shareUrl?: string;
 
     <div class="data-note">
       <div class="dn-t">Data Confidence</div>
-      <div class="dn-b">This analysis is Tier 1 \u2014 based on USDA SSURGO federal soil survey data only. No local ${data.county} County Environmental Health perc test records are currently in the PercIQ database for this area. Scores are directional indicators. A licensed site evaluation is required before any permit application.</div>
+      <div class="dn-b">${stateCopy.dataConfidenceBody(county)}</div>
     </div>
   </div>
   <div class="pg-foot"><span>${footerAddr}</span><span>perciq.com</span><span>Page 3 of 4 \u00b7 ${data.generatedDate}</span></div>
@@ -1120,7 +1177,7 @@ export function generateReportHTML(data: ReportData, meta?: { shareUrl?: string;
     <div><div class="pg-sec">Section 03</div><h2 class="pg-title">Recommended Test Sites</h2></div>
     <div class="pg-hdr-r">
       <div class="pg-wm"><svg viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg" width="20" height="20"><defs><filter id="ph-glow" x="-50%" y="-50%" width="200%" height="200%"><feGaussianBlur stdDeviation="2.25" result="blur"/><feColorMatrix type="matrix" values="0 0 0 0 0.129 0 0 0 0 0.773 0 0 0 0 0.369 0 0 0 0.3 0" result="colBlur"/><feMerge><feMergeNode in="colBlur"/><feMergeNode in="SourceGraphic"/></feMerge></filter></defs><g stroke="#21C55E" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" fill="none" filter="url(#ph-glow)"><path d="M 26 59 L 50 69 L 74 59"/><path d="M 26 48 L 50 58 L 74 48"/><polygon points="50,27 74,37 50,47 26,37" fill="none"/></g></svg><span class="pg-wm-name">PERC<span style="color:var(--g);font-weight:300">IQ</span></span></div>
-      <div class="pg-prop">${data.address} \u00b7 ${data.county}, ${data.state}</div>
+      <div class="pg-prop">${address} \u00b7 ${county}, ${state}</div>
     </div>
   </div>
   <div class="pg-rule"></div>
@@ -1149,7 +1206,7 @@ export function generateReportHTML(data: ReportData, meta?: { shareUrl?: string;
 </div></div>
 
 <div class="dl-bar">
-  <div class="dl-info"><strong>${data.address}</strong> &nbsp;&middot;&nbsp; PercIQ Soil Suitability Report &nbsp;&middot;&nbsp; ${data.generatedDate}</div>
+  <div class="dl-info"><strong>${address}</strong> &nbsp;&middot;&nbsp; PercIQ Soil Suitability Report &nbsp;&middot;&nbsp; ${data.generatedDate}</div>
   <div class="dl-actions">
     ${publicReportUrl ? '<button class="dl-btn dl-btn-ghost" id="share-btn"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg> Share</button>' : ''}
     <button class="dl-btn dl-btn-primary" id="dl-btn"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg> <span id="dl-label">Save as PDF</span></button>

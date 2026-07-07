@@ -1,7 +1,7 @@
 import { useEffect, useState, useCallback } from 'react';
 import { supabase } from '../lib/supabase';
 import type { Report, SoilResult } from '../types/database';
-import { generateReportHTML, buildSeriesSummary } from '../utils/generateReport';
+import { generateReportHTML, buildSeriesSummary, toTitleCase } from '../utils/generateReport';
 import type { ReportData, ZoneData, SeriesData } from '../utils/generateReport';
 import { Layers, ExternalLink, Download, Link2, Check, RefreshCw } from 'lucide-react';
 
@@ -214,7 +214,7 @@ export default function PublicReportPage({ reportId }: PublicReportPageProps) {
         };
       }
 
-      setAddress(reportData.address);
+      setAddress(toTitleCase(reportData.address));
 
       const publicReportUrl = `https://app.perciq.co/report/${reportId}`;
       const slug = reportData.address.replace(/[^a-z0-9]+/gi, '-').toLowerCase().slice(0, 40);

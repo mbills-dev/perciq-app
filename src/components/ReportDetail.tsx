@@ -8,7 +8,7 @@ import {
   RefreshCw, AlertCircle,
   ChevronDown, ChevronUp, Circle, Download, Link2, Check, ExternalLink, Compass,
 } from 'lucide-react';
-import { generateReportHTML, buildSeriesSummary } from '../utils/generateReport';
+import { generateReportHTML, buildSeriesSummary, toTitleCase } from '../utils/generateReport';
 import type { PercPinData } from '../utils/generateReport';
 
 interface ReportDetailProps {
@@ -5120,7 +5120,7 @@ export default function ReportDetail({ reportId, onBack, isPublic = false }: Rep
           <div className="min-w-0 flex-1">
             <h2 className="text-sm font-semibold leading-snug truncate text-white" style={{ letterSpacing: '-0.2px' }}>
               {(() => {
-                const addr = parcel?.address ?? parcel?.apn ?? 'Parcel Report';
+                const addr = toTitleCase(parcel?.address ?? parcel?.apn ?? 'Parcel Report');
                 const parts = addr.split(',').map((s: string) => s.trim());
                 return parts.length >= 3 ? parts.slice(0, 3).join(', ') : addr;
               })()}
@@ -5129,8 +5129,8 @@ export default function ReportDetail({ reportId, onBack, isPublic = false }: Rep
               {[
                 parcel?.acreage != null ? `${parcel.acreage.toFixed(2)} ac` : null,
                 parcelOwner ? parcelOwner.toUpperCase() : null,
-                parcel?.county ? `${parcel.county} Co.` : null,
-                parcel?.state ?? null,
+                parcel?.county ? `${toTitleCase(parcel.county)} Co.` : null,
+                parcel?.state ? parcel.state.toUpperCase() : null,
               ].filter(Boolean).join(' · ')}
             </p>
           </div>
@@ -5196,7 +5196,7 @@ export default function ReportDetail({ reportId, onBack, isPublic = false }: Rep
                 : <AlertCircle className="w-3 h-3 flex-shrink-0" style={{ color: '#FF9F0A' }} />
               }
               <span style={{ fontSize: 10, color: 'rgba(255,255,255,0.38)', letterSpacing: '0.3px' }}>
-                {parcel?.county ? `${parcel.county} EH` : 'County EH'}
+                {parcel?.county ? `${toTitleCase(parcel.county)} EH` : 'County EH'}
               </span>
             </div>
             <div className="flex items-center gap-1.5">
