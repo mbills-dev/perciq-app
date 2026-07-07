@@ -3750,12 +3750,13 @@ function MapPanel({ reportId, cachedOverlayGeojson, parcelBoundary, isBboxFallba
 
     const id = setTimeout(() => {
       setOverlayGone(true);
-      if (map && !initialCameraRef.current) {
+      const mapInst = mapRef.current;
+      if (mapInst && !initialCameraRef.current) {
         initialCameraRef.current = {
-          zoom: map.getZoom(),
-          center: map.getCenter(),
-          bearing: map.getBearing(),
-          pitch: map.getPitch(),
+          zoom: mapInst.getZoom(),
+          center: mapInst.getCenter(),
+          bearing: mapInst.getBearing(),
+          pitch: mapInst.getPitch(),
         };
       }
     }, timedOut ? 2420 : 420);
