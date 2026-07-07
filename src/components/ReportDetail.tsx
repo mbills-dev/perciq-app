@@ -4290,24 +4290,23 @@ export default function ReportDetail({ reportId, onBack, isPublic = false }: Rep
     }
     if (best === 0) return;
 
-    const BUCKET_SCORE: Record<string, number> = { viable: 80, possible: 45, 'not-suitable': 10, 'no-data': 30 };
+    // Mirror the pipeline scoring exactly: suitabilityScore already has flood/wetland
+    // penalties baked in via scoreSoilPolygon — do NOT apply them again here.
+    const BUCKET_SCORE_FALLBACK: Record<string, number> = { viable: 80, possible: 45, 'engineering-needed': 45, 'not-suitable': 10, 'no-data': 30 };
     let weightedSum = 0;
     let totalArea = 0;
     for (const poly of mapSoilPolygons) {
       try {
         const area = turf.area(poly.geojson);
         const score = (poly.geojson.properties as Record<string, unknown>)?.suitabilityScore as number
-          ?? BUCKET_SCORE[poly.bucket] ?? 30;
+          ?? (poly as { result?: { conventional_score?: number } }).result?.conventional_score
+          ?? BUCKET_SCORE_FALLBACK[poly.bucket] ?? 30;
         weightedSum += score * area;
         totalArea += area;
       } catch { /* skip degenerate */ }
     }
     const baseParcelScore = totalArea > 0 ? weightedSum / totalArea : best;
-    const floodFrac = (envCoverage?.floodPct ?? 0) / 100;
-    const wetlandFrac = (envCoverage?.nwiPct ?? 0) / 100;
-    const computedParcelScore = Math.round(Math.min(100, Math.max(0,
-      baseParcelScore * (1 - floodFrac * 0.75) * (1 - wetlandFrac * 0.85)
-    )));
+    const computedParcelScore = Math.round(Math.min(100, Math.max(0, baseParcelScore)));
 
     scoreWrittenRef.current = true;
     supabase.from('reports').update({
