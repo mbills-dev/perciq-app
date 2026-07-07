@@ -4802,8 +4802,6 @@ export default function ReportDetail({ reportId, onBack, isPublic = false }: Rep
     };
   }, [envCoverage, mapSoilPolygons, report, parcelScore, zoneScore]);
 
-  const [pdfError, setPdfError] = useState(false);
-
   // Build the report HTML + slug from current state, capturing a fresh map snapshot.
   const buildReportHtml = useCallback(async (): Promise<{ html: string; slug: string }> => {
     let freshSnapshot: string | null = mapSnapshotRef.current;
@@ -4837,57 +4835,21 @@ export default function ReportDetail({ reportId, onBack, isPublic = false }: Rep
     return { html, slug };
   }, [buildReportData, reportId]);
 
-  // ── Download PDF via serverless Puppeteer ──
+  // ── View Report: capture fresh snapshot, persist report_data, open public URL ──
   const handleDownloadReport = useCallback(async () => {
     if (isGeneratingPdf) return;
     setIsGeneratingPdf(true);
-    setPdfError(false);
     try {
-      const { html, slug } = await buildReportHtml();
-      const filename = `PercIQ-${slug}.pdf`;
-
-      const response = await fetch('/api/generate-pdf', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ html, filename }),
-      });
-
-      if (!response.ok) {
-        throw new Error(`API returned ${response.status}`);
-      }
-
-      const pdfBlob = await response.blob();
-      const url = URL.createObjectURL(pdfBlob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = filename;
-      a.click();
-      setTimeout(() => URL.revokeObjectURL(url), 15000);
+      // Run capture + persist so the public page has up-to-date report_data.
+      await buildReportHtml();
+      const publicUrl = `https://app.perciq.co/report/${reportId}`;
+      window.open(publicUrl, '_blank');
     } catch (err) {
-      console.error('[report] PDF generation failed:', err);
-      setPdfError(true);
+      console.error('[report] view report failed:', err);
     } finally {
       setIsGeneratingPdf(false);
     }
-  }, [isGeneratingPdf, buildReportHtml]);
-
-  // ── Print fallback ──
-  const handlePrintFallback = useCallback(async () => {
-    if (isGeneratingPdf) return;
-    setIsGeneratingPdf(true);
-    setPdfError(false);
-    try {
-      const { html } = await buildReportHtml();
-      const blob = new Blob([html], { type: 'text/html;charset=utf-8' });
-      const url = URL.createObjectURL(blob);
-      window.open(url, '_blank');
-      setTimeout(() => URL.revokeObjectURL(url), 30000);
-    } catch (err) {
-      console.error('[report] print fallback failed:', err);
-    } finally {
-      setIsGeneratingPdf(false);
-    }
-  }, [isGeneratingPdf, buildReportHtml]);
+  }, [isGeneratingPdf, buildReportHtml, reportId]);
 
   // ── Share: copy report URL to clipboard ──
   const handleShare = useCallback(() => {
@@ -5248,34 +5210,10 @@ export default function ReportDetail({ reportId, onBack, isPublic = false }: Rep
                 {isGeneratingPdf ? (
                   <RefreshCw size={11} className="animate-spin" />
                 ) : (
-                  <Download size={11} />
+                  <ExternalLink size={11} />
                 )}
-                {isGeneratingPdf ? 'Generating PDF…' : 'Download PDF'}
+                {isGeneratingPdf ? 'Preparing…' : 'View Report'}
               </button>
-              {pdfError && (
-                <button
-                  onClick={handlePrintFallback}
-                  disabled={isGeneratingPdf}
-                  title="Open report page and use browser Print → Save as PDF"
-                  style={{
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: 5,
-                    padding: '8px 10px',
-                    borderRadius: 9,
-                    background: 'transparent',
-                    border: '1px solid rgba(255,159,9,0.4)',
-                    color: '#FF9F09',
-                    fontSize: 11,
-                    fontWeight: 600,
-                    cursor: 'pointer',
-                    whiteSpace: 'nowrap',
-                  }}
-                >
-                  <ExternalLink size={10} />
-                  Print instead
-                </button>
-              )}
               <button
                 onClick={handleShare}
                 title="Copy shareable link"

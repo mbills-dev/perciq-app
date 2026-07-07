@@ -1,9 +1,9 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useCallback } from 'react';
 import { supabase } from '../lib/supabase';
 import type { Report, SoilResult } from '../types/database';
 import { generateReportHTML, buildSeriesSummary } from '../utils/generateReport';
 import type { ReportData, ZoneData, SeriesData } from '../utils/generateReport';
-import { Layers, ExternalLink, Download } from 'lucide-react';
+import { Layers, ExternalLink, Download, Link2, Check, RefreshCw } from 'lucide-react';
 
 // ── Fallback score helpers (used only when report_data is not yet cached) ─────
 
@@ -173,14 +173,11 @@ export default function PublicReportPage({ reportId }: PublicReportPageProps) {
   const [reportHtml, setReportHtml] = useState('');
   const [reportStyles, setReportStyles] = useState('');
   const [address, setAddress] = useState('');
+  const [fullHtml, setFullHtml] = useState('');
+  const [filename, setFilename] = useState('PercIQ-report.pdf');
   const [pdfLoading, setPdfLoading] = useState(false);
-  const [isLoggedIn, setIsLoggedIn] = useState<boolean | null>(null);
-
-  useEffect(() => {
-    supabase.auth.getSession().then(({ data: { session } }) => {
-      setIsLoggedIn(!!session);
-    });
-  }, []);
+  const [pdfError, setPdfError] = useState(false);
+  const [linkCopied, setLinkCopied] = useState(false);
 
   useEffect(() => {
     async function load() {
@@ -215,13 +212,18 @@ export default function PublicReportPage({ reportId }: PublicReportPageProps) {
       setAddress(reportData.address);
 
       const publicReportUrl = `https://app.perciq.co/report/${reportId}`;
+      const slug = reportData.address.replace(/[^a-z0-9]+/gi, '-').toLowerCase().slice(0, 40);
+      const pdfFilename = `PercIQ-${slug}.pdf`;
       const html = generateReportHTML(reportData, {
         shareUrl: publicReportUrl,
         publicReportUrl,
-        filename: `PercIQ-${reportData.address.replace(/[^a-z0-9]+/gi, '-').toLowerCase().slice(0, 40)}.pdf`,
+        filename: pdfFilename,
       });
 
+      setFullHtml(html);
+      setFilename(pdfFilename);
       setReportStyles(extractHeadStyles(html));
+      // Strip the inline dl-bar (we provide our own action bar)
       const body = extractBodyContent(html).replace(/<div class="dl-bar">[\s\S]*?<\/div>\s*(?=<script)/i, '');
       setReportHtml(body);
       setLoading(false);
@@ -229,16 +231,39 @@ export default function PublicReportPage({ reportId }: PublicReportPageProps) {
     load();
   }, [reportId]);
 
-  async function handleDownloadPdf() {
-    if (pdfLoading) return;
-    if (isLoggedIn === false) {
-      window.location.href = 'https://app.perciq.co';
-      return;
-    }
+  const handleDownloadPdf = useCallback(async () => {
+    if (pdfLoading || !fullHtml) return;
     setPdfLoading(true);
-    window.open(`https://app.perciq.co/?report=${reportId}`, '_blank');
-    setPdfLoading(false);
-  }
+    setPdfError(false);
+    try {
+      const response = await fetch('/api/generate-pdf', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ html: fullHtml, filename }),
+      });
+      if (!response.ok) throw new Error(`API ${response.status}`);
+      const blob = await response.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = filename;
+      a.click();
+      setTimeout(() => URL.revokeObjectURL(url), 15000);
+    } catch (err) {
+      console.error('[public-report] PDF download failed:', err);
+      setPdfError(true);
+    } finally {
+      setPdfLoading(false);
+    }
+  }, [pdfLoading, fullHtml, filename]);
+
+  const handleCopyLink = useCallback(() => {
+    const url = `https://app.perciq.co/report/${reportId}`;
+    navigator.clipboard.writeText(url).then(() => {
+      setLinkCopied(true);
+      setTimeout(() => setLinkCopied(false), 2000);
+    });
+  }, [reportId]);
 
   if (loading) {
     return (
@@ -267,9 +292,11 @@ export default function PublicReportPage({ reportId }: PublicReportPageProps) {
 
   return (
     <div className="min-h-screen bg-[#c8cfd8]" style={{ paddingBottom: '80px' }}>
-      <style dangerouslySetInnerHTML={{ __html: reportStyles }} />
+      <style dangerouslySetInnerHTML={{ __html: reportStyles + '\n@media print{.public-action-bar,.public-cta-bar{display:none!important}}' }} />
 
+      {/* Action bar — hidden in print */}
       <div
+        className="public-action-bar"
         style={{
           position: 'sticky', top: 0, zIndex: 100,
           background: 'rgba(10,15,30,0.92)',
@@ -302,24 +329,52 @@ export default function PublicReportPage({ reportId }: PublicReportPageProps) {
           </p>
         </div>
 
+        {/* Copy share link */}
         <button
-          onClick={handleDownloadPdf}
-          disabled={pdfLoading}
+          onClick={handleCopyLink}
+          title="Copy shareable link"
           style={{
             display: 'flex', alignItems: 'center', gap: 5,
             padding: '8px 12px', borderRadius: 8,
-            background: '#22C55E', border: 'none',
-            color: '#fff', fontSize: 12, fontWeight: 700,
-            cursor: pdfLoading ? 'default' : 'pointer',
-            opacity: pdfLoading ? 0.7 : 1,
+            background: 'transparent',
+            border: `1px solid ${linkCopied ? 'rgba(34,197,94,0.5)' : 'rgba(255,255,255,0.14)'}`,
+            color: linkCopied ? '#22C55E' : 'rgba(255,255,255,0.55)',
+            fontSize: 12, fontWeight: 600,
+            cursor: 'pointer',
             flexShrink: 0,
             letterSpacing: '0.01em',
-            minHeight: 44,
+            minHeight: 36,
             whiteSpace: 'nowrap',
+            transition: 'border-color 150ms, color 150ms',
           }}
         >
-          <Download size={11} />
-          {isLoggedIn ? 'Download PDF' : 'Sign in'}
+          {linkCopied ? <Check size={11} /> : <Link2 size={11} />}
+          {linkCopied ? 'Copied!' : 'Share'}
+        </button>
+
+        {/* Download PDF */}
+        <button
+          onClick={handleDownloadPdf}
+          disabled={pdfLoading || !fullHtml}
+          title={pdfError ? 'Download failed — try again' : 'Download as PDF'}
+          style={{
+            display: 'flex', alignItems: 'center', gap: 5,
+            padding: '8px 14px', borderRadius: 8,
+            background: pdfError ? 'rgba(255,69,57,0.15)' : '#22C55E',
+            border: pdfError ? '1px solid rgba(255,69,57,0.4)' : 'none',
+            color: pdfError ? '#FF4539' : '#fff',
+            fontSize: 12, fontWeight: 700,
+            cursor: (pdfLoading || !fullHtml) ? 'default' : 'pointer',
+            opacity: (pdfLoading || !fullHtml) ? 0.7 : 1,
+            flexShrink: 0,
+            letterSpacing: '0.01em',
+            minHeight: 36,
+            whiteSpace: 'nowrap',
+            transition: 'opacity 150ms',
+          }}
+        >
+          {pdfLoading ? <RefreshCw size={11} className="animate-spin" /> : <Download size={11} />}
+          {pdfLoading ? 'Generating…' : pdfError ? 'Retry PDF' : 'Download PDF'}
         </button>
       </div>
 
