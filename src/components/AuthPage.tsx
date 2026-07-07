@@ -19,8 +19,14 @@ export default function AuthPage() {
         const { error } = await supabase.auth.signInWithPassword({ email, password });
         if (error) throw error;
       } else {
-        const { error } = await supabase.auth.signUp({ email, password });
+        const { data, error } = await supabase.auth.signUp({ email, password });
         if (error) throw error;
+        if (data.user) {
+          await supabase.from('user_profiles').upsert(
+            { id: data.user.id, terms_accepted_at: new Date().toISOString() },
+            { onConflict: 'id' }
+          );
+        }
       }
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : 'An error occurred');
@@ -120,7 +126,25 @@ export default function AuthPage() {
 
           {mode === 'signup' && (
             <p className="text-xs text-white/30 text-center mt-4">
-              By creating an account you agree to our terms of service and privacy policy.
+              By creating an account, you agree to our{' '}
+              <a
+                href="https://perciq.co/terms"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="underline hover:text-white/50 transition-colors"
+              >
+                Terms of Service
+              </a>{' '}
+              and{' '}
+              <a
+                href="https://perciq.co/privacy"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="underline hover:text-white/50 transition-colors"
+              >
+                Privacy Policy
+              </a>
+              .
             </p>
           )}
         </div>
