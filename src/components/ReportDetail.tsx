@@ -2741,6 +2741,34 @@ function MapPanel({ reportId, cachedOverlayGeojson, parcelBoundary, isBboxFallba
         const W_FLAT = 0.5;
         const ROWS = 8, COLS = 8;
         const MIN_PIN_SPACING_M = 15;
+        // TPI (Topographic Position Index) — reject pins in drainage bottoms / ravines.
+        // tpi = candidate_elevation - mean(ring_elevations). Negative => lower than surroundings.
+        const TPI_RING_RADIUS_M = 30;
+        const TPI_REJECT_M = -1.5;
+        const TPI_PENALTY_M = -0.5;
+        const TPI_PENALTY_POINTS = 30;
+
+        // Compute TPI for a candidate point using the existing DEM sampling utility.
+        // Returns null when DEM is unavailable so callers can skip the filter.
+        const computeTpi = (map: mapboxgl.Map, lng: number, lat: number): number | null => {
+          try {
+            const center = map.queryTerrainElevation([lng, lat]);
+            if (center === null) return null;
+            const ring: (number | null)[] = [];
+            for (let a = 0; a < 360; a += 45) {
+              const rad = (a * Math.PI) / 180;
+              const dx = (TPI_RING_RADIUS_M / 111000) * Math.cos(rad);
+              const dy = (TPI_RING_RADIUS_M / 111000) * Math.sin(rad);
+              ring.push(map.queryTerrainElevation([lng + dx, lat + dy]));
+            }
+            const valid = ring.filter((e): e is number => e !== null);
+            if (valid.length < 4) return null;
+            const mean = valid.reduce((s, e) => s + e, 0) / valid.length;
+            return center - mean;
+          } catch {
+            return null;
+          }
+        };
 
         type ScoredPoint = {
           pt: turf.Feature<turf.Point>;
@@ -2753,6 +2781,9 @@ function MapPanel({ reportId, cachedOverlayGeojson, parcelBoundary, isBboxFallba
           demSlopeScore: number;
           clearance?: number;
           isFallback?: boolean;
+          tpiM?: number | null;
+          tpiRejected?: boolean;
+          basePtScore?: number;
           zoneLabel: string;
           zoneMukey: string;
           zonePercMethod: string;
@@ -3006,12 +3037,38 @@ function MapPanel({ reportId, cachedOverlayGeojson, parcelBoundary, isBboxFallba
               ? (actualSlope <= 5 ? 0 : actualSlope <= 8 ? -15 : actualSlope <= 12 ? -35 : -55)
               : (ssurgoSlope === null ? 0 : ssurgoSlope <= 8 ? 0 : ssurgoSlope <= 15 ? -10 : ssurgoSlope <= 25 ? -30 : -999);
 
-            const ptScore = (inFlood ? 0 : 40) + (inWetland ? 0 : 40) + edgeBonus + slopePenalty;
-            return { pt: pt as turf.Feature<turf.Point>, ptScore, inFlood, inWetland, slope: ssurgoSlope, distToEdge: Math.round(distToEdge), actualSlope, demSlopeScore, clearance: Math.round(clearance), zoneLabel, zoneMukey: zone.mukey, zonePercMethod: percPinMethod, zonePoly };
+            const basePtScore = (inFlood ? 0 : 40) + (inWetland ? 0 : 40) + edgeBonus + slopePenalty;
+            // TPI (Topographic Position Index) — reject/penalize drainage bottoms.
+            const tpiM = demAvailable && mapRef.current ? computeTpi(mapRef.current, pLng, pLat) : null;
+            let ptScore = basePtScore;
+            let tpiRejected = false;
+            if (tpiM !== null) {
+              if (tpiM < TPI_REJECT_M) {
+                tpiRejected = true;
+                ptScore = -999;
+              } else if (tpiM < TPI_PENALTY_M) {
+                ptScore = basePtScore - TPI_PENALTY_POINTS;
+              }
+            }
+            return { pt: pt as turf.Feature<turf.Point>, ptScore, inFlood, inWetland, slope: ssurgoSlope, distToEdge: Math.round(distToEdge), actualSlope, demSlopeScore, clearance: Math.round(clearance), tpiM, tpiRejected, basePtScore, zoneLabel, zoneMukey: zone.mukey, zonePercMethod: percPinMethod, zonePoly };
           });
 
           console.log('[perc] discarded', exclusionEdgeDiscardCount, 'candidates — too close to wetland/flood edge (<20m)');
+          const tpiLowDiscardCount = scoredPoints.filter(p => p.tpiRejected === true && (p.basePtScore ?? 0) > 0).length;
+          const viableBaseCount = scoredPoints.filter(p => (p.basePtScore ?? 0) > 0).length;
+          if (tpiLowDiscardCount > 0) {
+            console.log(`[perc-pin] zone: ${zoneLabel} mukey: ${zone.mukey} topographic-low_discarded: ${tpiLowDiscardCount}`);
+          }
           let zoneSelected = selectFromPool(scoredPoints, minSpacing, maxPins);
+          let tpiFallback = false;
+          if (zoneSelected.length === 0 && tpiLowDiscardCount > 0 && tpiLowDiscardCount === viableBaseCount) {
+            console.log('[perc-pin] tpi-fallback');
+            tpiFallback = true;
+            const fallbackPool = scoredPoints.map(p =>
+              p.tpiRejected === true ? { ...p, ptScore: p.basePtScore ?? p.ptScore, tpiRejected: false } : p
+            );
+            zoneSelected = selectFromPool(fallbackPool, minSpacing, maxPins);
+          }
 
           // ─── STEP 4 + 5: Clearance floor → flatness ranking ────────────────────
           if (buildable && zoneSelected.length > 0) {
@@ -3025,14 +3082,20 @@ function MapPanel({ reportId, cachedOverlayGeojson, parcelBoundary, isBboxFallba
             if (!polylabelInSelected && polylabelPt) {
               const [plLng, plLat] = polylabelPt.geometry.coordinates;
               const plActualSlope = demAvailable && mapRef.current ? getActualSlope(mapRef.current, plLng, plLat) : null;
+              const plTpiM = demAvailable && mapRef.current ? computeTpi(mapRef.current, plLng, plLat) : null;
               let plDistToEdge = 0;
               if (parcelLine) { try { plDistToEdge = Math.round(turf.nearestPointOnLine(parcelLine, polylabelPt, { units: 'meters' }).properties.dist ?? 0); } catch { /* keep 0 */ } }
               let plClearance = 0;
               if (buildableLine) { try { plClearance = Math.round(turf.nearestPointOnLine(buildableLine, polylabelPt, { units: 'meters' }).properties.dist ?? 0); } catch { /* keep 0 */ } }
               const plDemSlopeScore = plActualSlope === null ? 0 : plActualSlope <= 5 ? 100 : plActualSlope <= 8 ? 85 : plActualSlope <= 12 ? 65 : 45;
               const plSlopePenalty = plActualSlope === null ? 0 : plActualSlope <= 5 ? 0 : plActualSlope <= 8 ? -15 : plActualSlope <= 12 ? -35 : -55;
-              const plPtScore = 40 + 40 + (plDistToEdge > EDGE_BONUS_HI_M ? 20 : plDistToEdge > EDGE_BONUS_LO_M ? 5 : 0) + plSlopePenalty;
-              zoneSelected = [...zoneSelected, { pt: polylabelPt, ptScore: plPtScore, inFlood: false, inWetland: false, slope: null, distToEdge: plDistToEdge, actualSlope: plActualSlope, demSlopeScore: plDemSlopeScore, clearance: plClearance, zoneLabel, zoneMukey: zone.mukey, zonePercMethod: percPinMethod, zonePoly }];
+              const plBasePtScore = 40 + 40 + (plDistToEdge > EDGE_BONUS_HI_M ? 20 : plDistToEdge > EDGE_BONUS_LO_M ? 5 : 0) + plSlopePenalty;
+              let plPtScore = plBasePtScore;
+              if (plTpiM !== null && plTpiM < TPI_PENALTY_M) {
+                // polylabel bypasses hard gates, so don't reject — just penalize
+                plPtScore = plBasePtScore - TPI_PENALTY_POINTS;
+              }
+              zoneSelected = [...zoneSelected, { pt: polylabelPt, ptScore: plPtScore, inFlood: false, inWetland: false, slope: null, distToEdge: plDistToEdge, actualSlope: plActualSlope, demSlopeScore: plDemSlopeScore, clearance: plClearance, tpiM: plTpiM, tpiRejected: false, basePtScore: plBasePtScore, zoneLabel, zoneMukey: zone.mukey, zonePercMethod: percPinMethod, zonePoly }];
             }
 
             // Step 4: hard clearance floor — polylabel always survives, others must clear it
@@ -3166,8 +3229,17 @@ function MapPanel({ reportId, cachedOverlayGeojson, parcelBoundary, isBboxFallba
                 ? (actualSlope <= 5 ? 0 : actualSlope <= 8 ? -15 : actualSlope <= 12 ? -35 : -55)
                 : (ssurgoSlope === null ? 0 : ssurgoSlope <= 8 ? 0 : ssurgoSlope <= 15 ? -10 : ssurgoSlope <= 25 ? -30 : -999);
 
-              const ptScore = (inFlood ? 0 : 40) + (inWetland ? 0 : 40) + edgeBonus + slopePenalty;
-              return { pt: pt as turf.Feature<turf.Point>, ptScore, inFlood, inWetland, slope: ssurgoSlope, distToEdge: Math.round(distToEdge), actualSlope, demSlopeScore, zoneLabel: 'expanded', zoneMukey: sp.mukey, zonePercMethod: 'expanded', zonePoly: sp.geojson };
+              const basePtScore = (inFlood ? 0 : 40) + (inWetland ? 0 : 40) + edgeBonus + slopePenalty;
+              const tpiM = demAvailable && mapRef.current ? computeTpi(mapRef.current, pLng, pLat) : null;
+              let ptScore = basePtScore;
+              if (tpiM !== null) {
+                if (tpiM < TPI_REJECT_M) {
+                  ptScore = -999;
+                } else if (tpiM < TPI_PENALTY_M) {
+                  ptScore = basePtScore - TPI_PENALTY_POINTS;
+                }
+              }
+              return { pt: pt as turf.Feature<turf.Point>, ptScore, inFlood, inWetland, slope: ssurgoSlope, distToEdge: Math.round(distToEdge), actualSlope, demSlopeScore, tpiM, basePtScore, zoneLabel: 'expanded', zoneMukey: sp.mukey, zonePercMethod: 'expanded', zonePoly: sp.geojson };
             });
 
             const candidates = selectFromPool(zoneScored, 8, MAX_PERC_PINS);
@@ -3222,7 +3294,7 @@ function MapPanel({ reportId, cachedOverlayGeojson, parcelBoundary, isBboxFallba
         }
 
         // Build per-feature tooltip HTML stored as a property so click handler can retrieve it
-        const percFeatures = allSelected.map(({ pt, inFlood, inWetland, slope, ptScore, distToEdge, actualSlope, isFallback, clearance: pinClearance, zoneLabel, zoneMukey, zonePercMethod }, i) => {
+        const percFeatures = allSelected.map(({ pt, inFlood, inWetland, slope, ptScore, distToEdge, actualSlope, isFallback, clearance: pinClearance, tpiM, zoneLabel, zoneMukey, zonePercMethod }, i) => {
           const pinNumber = i + 1;
           const pinColor = '#FFFFFF';
           const rankLabels = ['Best Site', 'Alt Site 2', 'Alt Site 3'];
@@ -3264,7 +3336,7 @@ function MapPanel({ reportId, cachedOverlayGeojson, parcelBoundary, isBboxFallba
           const tooltipHtml = `<div style="background:rgba(10,15,25,0.95);border:1px solid rgba(255,255,255,0.1);border-radius:8px;padding:12px 16px;color:#fff;font-family:inherit;max-width:260px;"><div style="color:#f1f5f9;font-weight:700;font-size:13px;margin-bottom:8px;">${pinTitle}</div><div style="font-size:12px;line-height:1.6;">${rows.join('')}${note ? `<div style="color:rgba(255,255,255,0.65);margin-top:6px;font-size:11px;line-height:1.5;border-top:1px solid rgba(255,255,255,0.08);padding-top:6px;">${note}</div>` : ''}</div></div>`;
 
           console.log(`[perc] pin ${pinNumber} at`, pt.geometry.coordinates, 'score:', ptScore, 'flood:', inFlood, 'wetland:', inWetland, 'slope:', slope ?? 'unknown', 'edge dist:', Math.round(distToEdge) + 'm');
-          console.log(`[perc-pin] rank: ${pinNumber} zone: ${zoneLabel} mukey: ${zoneMukey} method: ${isFallback ? 'fallback' : zonePercMethod} setback_m: ${SETBACK_M} clearance_floor: ${CLEARANCE_FLOOR_FRAC} clearance_m: ${pinClearance ?? 0} slope_pct: ${actualSlope !== null ? actualSlope.toFixed(1) : 'null'} coord: [${pt.geometry.coordinates[0].toFixed(6)},${pt.geometry.coordinates[1].toFixed(6)}]`);
+          console.log(`[perc-pin] rank: ${pinNumber} zone: ${zoneLabel} mukey: ${zoneMukey} method: ${isFallback ? 'fallback' : zonePercMethod} setback_m: ${SETBACK_M} clearance_floor: ${CLEARANCE_FLOOR_FRAC} clearance_m: ${pinClearance ?? 0} slope_pct: ${actualSlope !== null ? actualSlope.toFixed(1) : 'null'} tpi_m: ${tpiM !== null && tpiM !== undefined ? tpiM.toFixed(2) : 'null'} coord: [${pt.geometry.coordinates[0].toFixed(6)},${pt.geometry.coordinates[1].toFixed(6)}]`);
 
           const iconId = isFallback ? 'perc-circle-fallback' : `perc-circle-${pinNumber}`;
 
