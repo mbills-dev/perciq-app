@@ -2741,6 +2741,9 @@ function MapPanel({ reportId, cachedOverlayGeojson, parcelBoundary, isBboxFallba
         const W_FLAT = 0.5;
         const ROWS = 8, COLS = 8;
         const MIN_PIN_SPACING_M = 15;
+        // Minimum quality floor — a zone's best candidate must score at least this to place a pin.
+        // Below this, the pin is suppressed (badge still renders, no numbered perc pin).
+        const MIN_PIN_SCORE = 30;
         // TPI (Topographic Position Index) — reject pins in drainage bottoms / ravines.
         // tpi = candidate_elevation - mean(ring_elevations). Negative => lower than surroundings.
         const TPI_RING_RADIUS_M = 30;
@@ -3062,7 +3065,7 @@ function MapPanel({ reportId, cachedOverlayGeojson, parcelBoundary, isBboxFallba
           let zoneSelected = selectFromPool(scoredPoints, minSpacing, maxPins);
           let tpiFallback = false;
           if (zoneSelected.length === 0 && tpiLowDiscardCount > 0 && tpiLowDiscardCount === viableBaseCount) {
-            console.log('[perc-pin] tpi-fallback');
+            console.log(`[perc-pin] tpi-fallback zone: ${zoneLabel} — no candidates above TPI threshold`);
             tpiFallback = true;
             const fallbackPool = scoredPoints.map(p =>
               p.tpiRejected === true ? { ...p, ptScore: p.basePtScore ?? p.ptScore, tpiRejected: false } : p
@@ -3091,11 +3094,21 @@ function MapPanel({ reportId, cachedOverlayGeojson, parcelBoundary, isBboxFallba
               const plSlopePenalty = plActualSlope === null ? 0 : plActualSlope <= 5 ? 0 : plActualSlope <= 8 ? -15 : plActualSlope <= 12 ? -35 : -55;
               const plBasePtScore = 40 + 40 + (plDistToEdge > EDGE_BONUS_HI_M ? 20 : plDistToEdge > EDGE_BONUS_LO_M ? 5 : 0) + plSlopePenalty;
               let plPtScore = plBasePtScore;
-              if (plTpiM !== null && plTpiM < TPI_PENALTY_M) {
-                // polylabel bypasses hard gates, so don't reject — just penalize
-                plPtScore = plBasePtScore - TPI_PENALTY_POINTS;
+              let plTpiRejected = false;
+              if (plTpiM !== null) {
+                if (plTpiM < TPI_REJECT_M) {
+                  plTpiRejected = true;
+                  plPtScore = -999;
+                } else if (plTpiM < TPI_PENALTY_M) {
+                  plPtScore = plBasePtScore - TPI_PENALTY_POINTS;
+                }
               }
-              zoneSelected = [...zoneSelected, { pt: polylabelPt, ptScore: plPtScore, inFlood: false, inWetland: false, slope: null, distToEdge: plDistToEdge, actualSlope: plActualSlope, demSlopeScore: plDemSlopeScore, clearance: plClearance, tpiM: plTpiM, tpiRejected: false, basePtScore: plBasePtScore, zoneLabel, zoneMukey: zone.mukey, zonePercMethod: percPinMethod, zonePoly }];
+              // Skip polylabel injection when it fails the TPI reject threshold —
+              // it should not bypass the final selection gate. Only inject if it
+              // survives TPI (or DEM is unavailable).
+              if (plTpiM === null || !plTpiRejected) {
+                zoneSelected = [...zoneSelected, { pt: polylabelPt, ptScore: plPtScore, inFlood: false, inWetland: false, slope: null, distToEdge: plDistToEdge, actualSlope: plActualSlope, demSlopeScore: plDemSlopeScore, clearance: plClearance, tpiM: plTpiM, tpiRejected: plTpiRejected, basePtScore: plBasePtScore, zoneLabel, zoneMukey: zone.mukey, zonePercMethod: percPinMethod, zonePoly }];
+              }
             }
 
             // Step 4: hard clearance floor — polylabel always survives, others must clear it
@@ -3144,6 +3157,18 @@ function MapPanel({ reportId, cachedOverlayGeojson, parcelBoundary, isBboxFallba
             }
             console.log(`[perc-pin] zone: ${zoneLabel} mukey: ${zone.mukey} spacing_filter_discarded: ${spacingDiscarded}`);
             zoneSelected = spacingPassed.map(sp => ({ ...sp, zonePercMethod: percPinMethod }));
+
+            // MIN_PIN_SCORE floor: drop pins whose final score is below the quality floor.
+            // The zone badge still renders (it's drawn from soil polygons, not from allSelected),
+            // but the numbered perc pin is omitted so we don't send users to dig in a ravine.
+            const qualityPassed = zoneSelected.filter(p => p.ptScore >= MIN_PIN_SCORE);
+            const qualitySuppressed = zoneSelected.length - qualityPassed.length;
+            if (qualitySuppressed > 0) {
+              for (const sp of zoneSelected.filter(p => p.ptScore < MIN_PIN_SCORE)) {
+                console.log(`[perc-pin] zone: ${zoneLabel} suppressed — best candidate score ${sp.ptScore} below MIN_PIN_SCORE`);
+              }
+            }
+            zoneSelected = qualityPassed;
 
             for (let rank = zoneSelected.length + 1; rank <= maxPins; rank++) {
               console.log(`[perc-pin] rank: ${allSelected.length + rank} zone: ${zoneLabel} mukey: ${zone.mukey} suppressed: true reason: no-interior-after-setback`);
@@ -3243,8 +3268,9 @@ function MapPanel({ reportId, cachedOverlayGeojson, parcelBoundary, isBboxFallba
             });
 
             const candidates = selectFromPool(zoneScored, 8, MAX_PERC_PINS);
-            if (candidates.length > 0) {
-              allSelected.push(...candidates);
+            const qualityCandidates = candidates.filter(p => p.ptScore >= MIN_PIN_SCORE);
+            if (qualityCandidates.length > 0) {
+              allSelected.push(...qualityCandidates);
               fromExpandedSearch = true;
               console.log('[perc] expanded search placed pins in zone', sp.mukey, 'score', (sp.geojson.properties?.suitabilityScore as number) ?? 0, 'bucket', sp.bucket);
               break;
