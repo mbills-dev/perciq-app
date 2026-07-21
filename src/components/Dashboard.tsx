@@ -44,9 +44,9 @@ const CAT_COLOR: Record<Category, string> = {
 };
 
 const CAT_LABEL: Record<Category, string> = {
-  suitable: 'Suitable',
-  marginal: 'Marginal',
-  unsuitable: 'Unsuitable',
+  suitable: 'Viable',
+  marginal: 'Engineering Needed',
+  unsuitable: 'Not suitable',
   pending: 'Pending',
 };
 
@@ -878,16 +878,16 @@ export default function Dashboard({ onViewReport, onCreateReport, onNavigateSett
 
   const statCards = [
     { id: 'all' as FilterTab, label: 'Parcels', value: total, color: 'rgba(255,255,255,0.85)', border: 'rgba(255,255,255,0.80)' },
-    { id: 'suitable' as FilterTab, label: 'Suitable', value: suitable, color: '#30D158', border: '#30D158' },
-    { id: 'marginal' as FilterTab, label: 'Marginal', value: marginal, color: '#FF9F0A', border: '#FF9F0A' },
-    { id: 'unsuitable' as FilterTab, label: 'Unsuitable', value: unsuitable, color: '#FF453A', border: '#FF453A' },
+    { id: 'suitable' as FilterTab, label: 'Viable', value: suitable, color: '#30D158', border: '#30D158' },
+    { id: 'marginal' as FilterTab, label: 'Engineering Needed', value: marginal, color: '#FF9F0A', border: '#FF9F0A' },
+    { id: 'unsuitable' as FilterTab, label: 'Not suitable', value: unsuitable, color: '#FF453A', border: '#FF453A' },
   ];
 
   const filterTabs: Array<{ id: FilterTab; label: string; tint: string; border: string; color: string }> = [
     { id: 'all', label: 'All', tint: 'rgba(255,255,255,0.07)', border: 'rgba(255,255,255,0.20)', color: 'rgba(255,255,255,0.85)' },
-    { id: 'suitable', label: 'Suitable', tint: 'rgba(48,209,88,0.10)', border: 'rgba(48,209,88,0.40)', color: '#30D158' },
-    { id: 'marginal', label: 'Marginal', tint: 'rgba(255,159,10,0.10)', border: 'rgba(255,159,10,0.40)', color: '#FF9F0A' },
-    { id: 'unsuitable', label: 'Unsuitable', tint: 'rgba(255,69,58,0.10)', border: 'rgba(255,69,58,0.40)', color: '#FF453A' },
+    { id: 'suitable', label: 'Viable', tint: 'rgba(48,209,88,0.10)', border: 'rgba(48,209,88,0.40)', color: '#30D158' },
+    { id: 'marginal', label: 'Engineering Needed', tint: 'rgba(255,159,10,0.10)', border: 'rgba(255,159,10,0.40)', color: '#FF9F0A' },
+    { id: 'unsuitable', label: 'Not suitable', tint: 'rgba(255,69,58,0.10)', border: 'rgba(255,69,58,0.40)', color: '#FF453A' },
   ];
 
   const allVisibleSelected = visible.length > 0 && visible.every(r => selectedIds.has(r.parcel.id));
@@ -974,9 +974,9 @@ export default function Dashboard({ onViewReport, onCreateReport, onNavigateSett
               {unsuitable > 0 && <div style={{ height: '100%', width: `${(unsuitable / analyzed) * 100}%`, background: '#FF453A', transition: 'width 0.7s' }} />}
             </div>
             <div className="flex flex-wrap items-center gap-3" style={{ fontSize: 11, color: 'rgba(255,255,255,0.45)' }}>
-              <span className="flex items-center gap-1.5"><span style={{ width: 7, height: 7, borderRadius: '50%', background: '#30D158', display: 'inline-block' }} />Suitable {suitable}</span>
-              <span className="flex items-center gap-1.5"><span style={{ width: 7, height: 7, borderRadius: '50%', background: '#FF9F0A', display: 'inline-block' }} />Marginal {marginal}</span>
-              <span className="flex items-center gap-1.5"><span style={{ width: 7, height: 7, borderRadius: '50%', background: '#FF453A', display: 'inline-block' }} />Unsuitable {unsuitable}</span>
+              <span className="flex items-center gap-1.5"><span style={{ width: 7, height: 7, borderRadius: '50%', background: '#30D158', display: 'inline-block' }} />Viable {suitable}</span>
+              <span className="flex items-center gap-1.5"><span style={{ width: 7, height: 7, borderRadius: '50%', background: '#FF9F0A', display: 'inline-block' }} />Engineering Needed {marginal}</span>
+              <span className="flex items-center gap-1.5"><span style={{ width: 7, height: 7, borderRadius: '50%', background: '#FF453A', display: 'inline-block' }} />Not suitable {unsuitable}</span>
             </div>
           </div>
         </div>
