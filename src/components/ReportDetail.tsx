@@ -1736,7 +1736,8 @@ function MapPanel({ reportId, cachedOverlayGeojson, parcelBoundary, isBboxFallba
     if (!el.dataset.zoneBucket) return;
     const bucket = el.dataset.zoneBucket;
     const active = tab === 'not-suitable' ? 'not-suitable' : tab;
-    el.style.opacity = (active === 'parcel' || !active || bucket === active) ? '1' : '0';
+    el.style.visibility =
+      (active === 'parcel' || !active || bucket === active) ? 'visible' : 'hidden';
   }
 
   // Load config tokens
@@ -3622,7 +3623,7 @@ function MapPanel({ reportId, cachedOverlayGeojson, parcelBoundary, isBboxFallba
       map.setPaintProperty('soil-outline', 'line-opacity', 0.6);
       zoneMarkersRef.current.forEach(m => {
         const el = m.getElement() as HTMLElement;
-        if (!zoneLabelsVisibleRef.current) { el.style.opacity = '0'; return; }
+        if (!zoneLabelsVisibleRef.current) { el.style.visibility = 'hidden'; return; }
         applyZoneMarkerTabFilter(el, 'parcel');
       });
     } else {
@@ -3637,7 +3638,7 @@ function MapPanel({ reportId, cachedOverlayGeojson, parcelBoundary, isBboxFallba
         ['match', ['get', 'bucket'], active, 0.75, 0.15]);
       zoneMarkersRef.current.forEach(m => {
         const el = m.getElement() as HTMLElement;
-        if (!zoneLabelsVisibleRef.current) { el.style.opacity = '0'; return; }
+        if (!zoneLabelsVisibleRef.current) { el.style.visibility = 'hidden'; return; }
         applyZoneMarkerTabFilter(el, active);
       });
     }
@@ -3707,7 +3708,7 @@ function MapPanel({ reportId, cachedOverlayGeojson, parcelBoundary, isBboxFallba
     }
     zoneMarkersRef.current.forEach(m => {
       const el = m.getElement() as HTMLElement;
-      if (!soilVisible || !zoneLabelsVisible) { el.style.opacity = '0'; return; }
+      if (!soilVisible || !zoneLabelsVisible) { el.style.visibility = 'hidden'; return; }
       applyZoneMarkerTabFilter(el, activeTab ?? 'parcel');
     });
     if (noZoneBadgeRef.current) {
