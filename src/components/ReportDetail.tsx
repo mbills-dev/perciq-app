@@ -2501,16 +2501,17 @@ function MapPanel({ reportId, cachedOverlayGeojson, parcelBoundary, isBboxFallba
       const srcId = `best-zone-${i}`;
       const zoneColor = zone.bucket === 'engineering-needed' ? '#F59E0B' : zone.bucket === 'not-suitable' ? '#EF4444' : '#22C55E';
       const zoneGlow  = zone.bucket === 'engineering-needed' ? '#F59E0B' : zone.bucket === 'not-suitable' ? '#EF4444' : '#30D158';
+      const tabMatch = (activeTabRef.current ?? 'parcel') === 'parcel' || !activeTabRef.current || zone.bucket === activeTabRef.current;
       try {
         map.addSource(srcId, { type: 'geojson', data: zone.geojson as mapboxgl.GeoJSONSourceSpecification['data'] });
-        map.addLayer({ id: `${srcId}-fill`, type: 'fill', source: srcId, paint: { 'fill-color': zoneColor, 'fill-opacity': 0.55 }, layout: { visibility: vis } }, beforeParcel);
+        map.addLayer({ id: `${srcId}-fill`, type: 'fill', source: srcId, paint: { 'fill-color': zoneColor, 'fill-opacity': tabMatch ? 0.55 : 0 }, layout: { visibility: vis } }, beforeParcel);
         if (isPrimary) {
-          map.addLayer({ id: `${srcId}-glow`, type: 'line', source: srcId, paint: { 'line-color': zoneGlow, 'line-width': 6, 'line-opacity': 0.2, 'line-blur': 3 }, layout: { visibility: vis } }, beforeParcel);
-          map.addLayer({ id: `${srcId}-outline`, type: 'line', source: srcId, paint: { 'line-color': zoneGlow, 'line-width': 2.5, 'line-opacity': 1.0 }, layout: { visibility: vis } }, beforeParcel);
+          map.addLayer({ id: `${srcId}-glow`, type: 'line', source: srcId, paint: { 'line-color': zoneGlow, 'line-width': 6, 'line-opacity': tabMatch ? 0.2 : 0, 'line-blur': 3 }, layout: { visibility: vis } }, beforeParcel);
+          map.addLayer({ id: `${srcId}-outline`, type: 'line', source: srcId, paint: { 'line-color': zoneGlow, 'line-width': 2.5, 'line-opacity': tabMatch ? 1.0 : 0 }, layout: { visibility: vis } }, beforeParcel);
           overlayIds.push(`${srcId}-fill`, `${srcId}-glow`, `${srcId}-outline`, srcId);
         } else {
-          map.addLayer({ id: `${srcId}-glow`, type: 'line', source: srcId, paint: { 'line-color': zoneGlow, 'line-width': 6, 'line-opacity': 0.2, 'line-blur': 3 }, layout: { visibility: vis } }, beforeParcel);
-          map.addLayer({ id: `${srcId}-outline`, type: 'line', source: srcId, paint: { 'line-color': zoneGlow, 'line-width': 2.5, 'line-opacity': 1.0 }, layout: { visibility: vis } }, beforeParcel);
+          map.addLayer({ id: `${srcId}-glow`, type: 'line', source: srcId, paint: { 'line-color': zoneGlow, 'line-width': 6, 'line-opacity': tabMatch ? 0.2 : 0, 'line-blur': 3 }, layout: { visibility: vis } }, beforeParcel);
+          map.addLayer({ id: `${srcId}-outline`, type: 'line', source: srcId, paint: { 'line-color': zoneGlow, 'line-width': 2.5, 'line-opacity': tabMatch ? 1.0 : 0 }, layout: { visibility: vis } }, beforeParcel);
           overlayIds.push(`${srcId}-fill`, `${srcId}-glow`, `${srcId}-outline`, srcId);
         }
       } catch { /* ignore */ }
@@ -3320,7 +3321,9 @@ function MapPanel({ reportId, cachedOverlayGeojson, parcelBoundary, isBboxFallba
         }
 
         // Build per-feature tooltip HTML stored as a property so click handler can retrieve it
-        const percFeatures = allSelected.map(({ pt, inFlood, inWetland, slope, ptScore, distToEdge, actualSlope, isFallback, clearance: pinClearance, tpiM, zoneLabel, zoneMukey, zonePercMethod }, i) => {
+        const percFeatures = allSelected.map(({ pt, inFlood, inWetland, slope, ptScore, distToEdge, actualSlope, isFallback, clearance: pinClearance, tpiM, zoneLabel, zoneMukey, zonePercMethod, zonePoly: pfZonePoly }, i) => {
+          const pfZoneProps = (pfZonePoly?.properties ?? {}) as Record<string, unknown>;
+          const pfZoneBucket = (pfZoneProps?.bucket as string) ?? 'viable';
           const pinNumber = i + 1;
           const pinColor = '#FFFFFF';
           const rankLabels = ['Best Site', 'Alt Site 2', 'Alt Site 3'];
@@ -3371,6 +3374,7 @@ function MapPanel({ reportId, cachedOverlayGeojson, parcelBoundary, isBboxFallba
             iconId,
             pinColor,
             tooltipHtml,
+            zoneBucket: pfZoneBucket,
           });
         });
 
@@ -3416,7 +3420,7 @@ function MapPanel({ reportId, cachedOverlayGeojson, parcelBoundary, isBboxFallba
 
         try {
           percFeatures.forEach(feature => {
-            const props = feature.properties as { rank: number; iconId: string; tooltipHtml: string };
+            const props = feature.properties as { rank: number; iconId: string; tooltipHtml: string; zoneBucket?: string };
             const [lng, lat] = (feature.geometry as turf.Point).coordinates as [number, number];
             const isFallbackPin = props.iconId === 'perc-circle-fallback';
             const fill = isFallbackPin ? '#9ca3af' : '#FFFFFF';
@@ -3426,6 +3430,8 @@ function MapPanel({ reportId, cachedOverlayGeojson, parcelBoundary, isBboxFallba
             const wrapper = document.createElement('div');
             wrapper.style.cssText = 'cursor:pointer;z-index:10;';
             wrapper.style.display = percVisible ? 'block' : 'none';
+            wrapper.dataset.zoneBucket = props.zoneBucket ?? 'viable';
+            applyZoneMarkerTabFilter(wrapper, activeTabRef.current ?? 'parcel');
             wrapper.appendChild(pinCanvas);
 
             wrapper.addEventListener('click', () => {
@@ -3635,6 +3641,28 @@ function MapPanel({ reportId, cachedOverlayGeojson, parcelBoundary, isBboxFallba
         applyZoneMarkerTabFilter(el, active);
       });
     }
+
+    // Best-zone highlight layers — filter by bucket using paint opacity only.
+    // Never setLayoutProperty visibility here — the soil overlay toggle owns that.
+    const zones = bestZoneRef.current?.zones ?? [];
+    zones.forEach((zone, i) => {
+      const match = activeTab === 'parcel' || !activeTab || zone.bucket === activeTab;
+      const fillId = `best-zone-${i}-fill`;
+      const glowId = `best-zone-${i}-glow`;
+      const outlineId = `best-zone-${i}-outline`;
+      try { if (map.getLayer(fillId)) map.setPaintProperty(fillId, 'fill-opacity', match ? 0.55 : 0); } catch { /* ignore */ }
+      try { if (map.getLayer(glowId)) map.setPaintProperty(glowId, 'line-opacity', match ? 0.2 : 0); } catch { /* ignore */ }
+      try { if (map.getLayer(outlineId)) map.setPaintProperty(outlineId, 'line-opacity', match ? 1.0 : 0); } catch { /* ignore */ }
+    });
+
+    // Perc pins — tab filter via opacity (independent of the percVisible display toggle)
+    percMarkersRef.current.forEach(m => {
+      const el = m.getElement() as HTMLElement;
+      if (!el) return;
+      applyZoneMarkerTabFilter(el, activeTab ?? 'parcel');
+    });
+
+    console.log('[tab-filter]', activeTab, 'bestZones:', zones.length, 'pins:', percMarkersRef.current.length, 'badges:', zoneMarkersRef.current.length);
   }, [activeTab]);
 
   // React to boundary / soil results updates
