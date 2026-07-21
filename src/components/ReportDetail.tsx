@@ -1092,8 +1092,8 @@ async function buildSoilPolygons(
   floodUnion: turf.Feature<turf.Polygon | turf.MultiPolygon> | null,
   wetlandUnion: turf.Feature<turf.Polygon | turf.MultiPolygon> | null,
   map: mapboxgl.Map | null = null,
-): Promise<SoilPolygon[]> {
-  if (!wfsFeatures.length) return [];
+): Promise<{ polygons: SoilPolygon[]; demSlopeByMukey: Record<string, number | null>; mukeyLogs: string[] }> {
+  if (!wfsFeatures.length) return { polygons: [], demSlopeByMukey: {}, mukeyLogs: [] };
 
   const resultByMukey = new Map<string, SoilResult>();
   for (const r of soilResults) {
@@ -1128,6 +1128,7 @@ async function buildSoilPolygons(
   console.log('[bbox] parcel geometry type:', parcelFeature.geometry.type);
   console.log('[bbox] parcel bbox:', bbox);
   const polygons: SoilPolygon[] = [];
+  const mukeyLogs: string[] = [];
   let bboxPassCount = 0;
   let intersectCount = 0;
 
@@ -1272,7 +1273,7 @@ async function buildSoilPolygons(
         ? parseFloat(clipped.properties.clay40_depth_cm as string) || null : null;
       clipped.properties.rawKsat = clipped.properties.ksat_r != null ? parseFloat(clipped.properties.ksat_r as string) || null
         : clipped.properties.ksat_h != null ? parseFloat(clipped.properties.ksat_h as string) || null : null;
-      console.log('[alerts] mukey', mukeyStr, 'gates_fired:', scoredGates.length ? scoredGates.join(' ') : 'none', 'ceiling:', scoredCeiling);
+      mukeyLogs.push(`[alerts] mukey ${mukeyStr} gates_fired: ${scoredGates.length ? scoredGates.join(' ') : 'none'} ceiling: ${scoredCeiling}`);
 
       // Copy scoring properties onto a display copy of the full unclipped SSURGO polygon.
       // Large parcels often have many small clipped slivers that leave visual gaps — the full
@@ -1322,7 +1323,7 @@ async function buildSoilPolygons(
   }
   console.log('[score] demSlopeByMukey:', JSON.stringify(demSlopeByMukey));
 
-  return { polygons, demSlopeByMukey };
+  return { polygons, demSlopeByMukey, mukeyLogs };
 }
 
 // Build exclusion zone overlay
@@ -2288,9 +2289,15 @@ function MapPanel({ reportId, cachedOverlayGeojson, parcelBoundary, isBboxFallba
     // the scorer always uses the freshest tabular data (not the stale snapshot captured at call time).
     const scoringResults = latestSoilResultsRef.current.length >= results.length
       ? latestSoilResultsRef.current : results;
-    console.log('[buildSoilPolygons] scoring with', scoringResults.length, 'tabular results (call had', results.length, ')');
-    console.log('[clip] parcel geometry type passed in:', originalParcelFeature.geometry.type);
-    const { polygons: soilPolygons, demSlopeByMukey } = await buildSoilPolygons(soilFeatures, originalParcelFeature as unknown as Record<string, unknown>, scoringResults, floodFeatures, wetlandFeatures, femaScoring, nwiScoring, mapRef.current);
+    const { polygons: soilPolygons, demSlopeByMukey, mukeyLogs } = await buildSoilPolygons(soilFeatures, originalParcelFeature as unknown as Record<string, unknown>, scoringResults, floodFeatures, wetlandFeatures, femaScoring, nwiScoring, mapRef.current);
+    // Deferred logging: emit per-pass/per-mukey logs only if this pass isn't stale.
+    // The stale pass's scoring still feeds the interim render; only its console output is suppressed.
+    const isStalePass = latestSoilResultsRef.current.length > scoringResults.length;
+    if (!isStalePass) {
+      console.log('[buildSoilPolygons] scoring with', scoringResults.length, 'tabular results (call had', results.length, ')');
+      console.log('[clip] parcel geometry type passed in:', originalParcelFeature.geometry.type);
+      for (const line of mukeyLogs) console.log(line);
+    }
     onDemSlopeReadyRef.current?.(demSlopeByMukey);
     if (soilPolygons.length > 0) onSoilPolygonsReadyRef.current?.(soilPolygons);
     const exclusion = buildExclusionZone(boundary, results);
