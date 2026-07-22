@@ -1323,7 +1323,13 @@ async function buildSoilPolygons(
   const demSlopeByMukey: Record<string, number | null> = {};
   for (const poly of polygons) {
     const rawDem = poly.geojson.properties?.zoneSlopeDemPct;
-    demSlopeByMukey[poly.mukey] = rawDem != null && rawDem !== 'null' ? Number(rawDem) : null;
+    const newSlope = rawDem != null && rawDem !== 'null' ? Number(rawDem) : null;
+    const mukeyStr = poly.mukey;
+    // Guard: a null sample (e.g. polygon extends beyond loaded terrain tiles)
+    // must never overwrite an existing valid slope for the same mukey.
+    if (Number.isFinite(newSlope) || !(mukeyStr in demSlopeByMukey)) {
+      demSlopeByMukey[mukeyStr] = Number.isFinite(newSlope) ? newSlope : null;
+    }
   }
   console.log('[score] demSlopeByMukey:', JSON.stringify(demSlopeByMukey));
 
