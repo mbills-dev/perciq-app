@@ -470,6 +470,10 @@ const GATE_BAND: Record<string, string> = {
   'slope15-30%':         'slope_marginal',
 };
 
+// Dedupe the [alerts] log: hover fires getSiteAlerts per mousemove, but we
+// only log once per distinct zone (mukey + fired-gates signature).
+let lastAlertsLogKey: string | null = null;
+
 function withTimeout<T>(p: Promise<T>, ms: number, label: string): Promise<T> {
   return Promise.race([
     p,
@@ -5035,9 +5039,6 @@ export default function ReportDetail({ reportId, onBack, isPublic = false }: Rep
   // ── Site Alerts helper — hoisted above early returns so the siteAlerts useMemo
   // can reference it without hitting the temporal dead zone. Uses only its argument
   // and module-level constants (BAND, GATE_BAND), no component state.
-  // Dedupe the [alerts] log: hover fires getSiteAlerts per mousemove, but we
-  // only log once per distinct zone (mukey + fired-gates signature).
-  let lastAlertsLogKey: string | null = null;
   const getSiteAlerts = (data: SoilHoverData | null): { criticals: string[]; warnings: string[] } => {
     if (!data) return { criticals: [], warnings: [] };
     const criticals: string[] = [];
