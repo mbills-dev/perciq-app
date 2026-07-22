@@ -5035,6 +5035,9 @@ export default function ReportDetail({ reportId, onBack, isPublic = false }: Rep
   // ── Site Alerts helper — hoisted above early returns so the siteAlerts useMemo
   // can reference it without hitting the temporal dead zone. Uses only its argument
   // and module-level constants (BAND, GATE_BAND), no component state.
+  // Dedupe the [alerts] log: hover fires getSiteAlerts per mousemove, but we
+  // only log once per distinct zone (mukey + fired-gates signature).
+  let lastAlertsLogKey: string | null = null;
   const getSiteAlerts = (data: SoilHoverData | null): { criticals: string[]; warnings: string[] } => {
     if (!data) return { criticals: [], warnings: [] };
     const criticals: string[] = [];
@@ -5046,7 +5049,11 @@ export default function ReportDetail({ reportId, onBack, isPublic = false }: Rep
       if (band.alertLevel === 'critical') criticals.push(band.alertText);
       else warnings.push(band.alertText);
     }
-    console.log('[alerts] mukey', data.mukey, 'gates_fired:', data.firedGates.join(' ') || 'none', 'alerts_emitted:', [...criticals, ...warnings].join(' | ') || 'none');
+    const logKey = `${data.mukey}|${data.firedGates.join(',')}`;
+    if (logKey !== lastAlertsLogKey) {
+      lastAlertsLogKey = logKey;
+      console.log('[alerts] mukey', data.mukey, 'gates_fired:', data.firedGates.join(' ') || 'none', 'alerts_emitted:', [...criticals, ...warnings].join(' | ') || 'none');
+    }
     return { criticals, warnings };
   };
 
