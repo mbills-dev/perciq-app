@@ -1096,8 +1096,8 @@ async function buildSoilPolygons(
   floodUnion: turf.Feature<turf.Polygon | turf.MultiPolygon> | null,
   wetlandUnion: turf.Feature<turf.Polygon | turf.MultiPolygon> | null,
   map: mapboxgl.Map | null = null,
-): Promise<{ polygons: SoilPolygon[]; demSlopeByMukey: Record<string, number | null>; mukeyLogs: string[] }> {
-  if (!wfsFeatures.length) return { polygons: [], demSlopeByMukey: {}, mukeyLogs: [] };
+): Promise<{ polygons: SoilPolygon[]; demSlopeByMukey: Record<string, number | null>; mukeyLogs: string[]; usedSsurgoFallback: boolean }> {
+  if (!wfsFeatures.length) return { polygons: [], demSlopeByMukey: {}, mukeyLogs: [], usedSsurgoFallback: false };
 
   const resultByMukey = new Map<string, SoilResult>();
   for (const r of soilResults) {
@@ -1120,6 +1120,7 @@ async function buildSoilPolygons(
   } else {
     console.log('[score] no map instance — zone slopes will use SSURGO fallback');
   }
+  const usedSsurgoFallback = slopeFromDem === null;
 
   const parcelFeature = toParcelFeature(parcelBoundary);
   const bbox = turf.bbox(parcelFeature);
@@ -1333,7 +1334,7 @@ async function buildSoilPolygons(
   }
   console.log('[score] demSlopeByMukey:', JSON.stringify(demSlopeByMukey));
 
-  return { polygons, demSlopeByMukey, mukeyLogs };
+  return { polygons, demSlopeByMukey, mukeyLogs, usedSsurgoFallback };
 }
 
 // Build exclusion zone overlay
@@ -1742,6 +1743,10 @@ function MapPanel({ reportId, cachedOverlayGeojson, parcelBoundary, isBboxFallba
   const bestZoneRef = useRef<{ zones: BestZone[]; isFallbackZone: boolean } | null>(null);
   // Tracks the last boundary+results key that was rendered to prevent duplicate runs
   const lastOverlayKeyRef = useRef<string>('');
+  // Ensures only one DEM-retry loop runs per report load (set when SSURGO fallback pass schedules a rescore)
+  const demRetryScheduledRef = useRef(false);
+  // Holds the DEM-retry interval ID so unmount can clear it
+  const demRetryIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   function applyZoneMarkerTabFilter(el: HTMLElement, tab: string) {
     if (!el.dataset.zoneBucket) return;
@@ -2299,7 +2304,7 @@ function MapPanel({ reportId, cachedOverlayGeojson, parcelBoundary, isBboxFallba
     // the scorer always uses the freshest tabular data (not the stale snapshot captured at call time).
     const scoringResults = latestSoilResultsRef.current.length >= results.length
       ? latestSoilResultsRef.current : results;
-    const { polygons: soilPolygons, demSlopeByMukey, mukeyLogs } = await buildSoilPolygons(soilFeatures, originalParcelFeature as unknown as Record<string, unknown>, scoringResults, floodFeatures, wetlandFeatures, femaScoring, nwiScoring, mapRef.current);
+    const { polygons: soilPolygons, demSlopeByMukey, mukeyLogs, usedSsurgoFallback } = await buildSoilPolygons(soilFeatures, originalParcelFeature as unknown as Record<string, unknown>, scoringResults, floodFeatures, wetlandFeatures, femaScoring, nwiScoring, mapRef.current);
     // Deferred logging: emit per-pass/per-mukey logs only if this pass isn't stale.
     // The stale pass's scoring still feeds the interim render; only its console output is suppressed.
     const isStalePass = latestSoilResultsRef.current.length > scoringResults.length;
@@ -2548,6 +2553,47 @@ function MapPanel({ reportId, cachedOverlayGeojson, parcelBoundary, isBboxFallba
       soilResultsCountRef.current = 0;
       await applyFullOverlay(map, boundary, latestSoilResultsRef.current, visible);
       return;
+    }
+
+    // If this pass used SSURGO slope because DEM wasn't ready in time, schedule a background
+    // retry so we rescore with real measured slopes once DEM becomes available.
+    if (usedSsurgoFallback && !demRetryScheduledRef.current) {
+      demRetryScheduledRef.current = true;
+      console.log('[score] DEM timed out — scheduling background retry for real slopes');
+      let attempts = 0;
+      const maxAttempts = 30;
+      const retryInterval = setInterval(() => {
+        const retryMap = mapRef.current;
+        if (!retryMap) {
+          clearInterval(retryInterval);
+          demRetryIntervalRef.current = null;
+          return;
+        }
+        attempts++;
+        try {
+          const elev = retryMap.queryTerrainElevation(retryMap.getCenter().toArray() as [number, number]);
+          if (elev !== null && elev !== 0) {
+            clearInterval(retryInterval);
+            demRetryIntervalRef.current = null;
+            console.log('[score] DEM became available — rescoring with real slopes');
+            soilRenderedRef.current = false;
+            bestZoneRef.current = null;
+            soilResultsCountRef.current = 0;
+            applyFullOverlay(retryMap, boundary, latestSoilResultsRef.current, visible);
+          } else if (attempts >= maxAttempts) {
+            clearInterval(retryInterval);
+            demRetryIntervalRef.current = null;
+            console.log('[score] DEM retry exhausted after', maxAttempts, 'attempts — keeping SSURGO scores');
+          }
+        } catch {
+          if (attempts >= maxAttempts) {
+            clearInterval(retryInterval);
+            demRetryIntervalRef.current = null;
+            console.log('[score] DEM retry exhausted after', maxAttempts, 'attempts — keeping SSURGO scores');
+          }
+        }
+      }, 2000);
+      demRetryIntervalRef.current = retryInterval;
     }
 
     // Soil click/hover — wired to the single soil-fill layer (register only once per map instance)
@@ -3606,6 +3652,10 @@ function MapPanel({ reportId, cachedOverlayGeojson, parcelBoundary, isBboxFallba
     });
 
     return () => {
+      if (demRetryIntervalRef.current) {
+        clearInterval(demRetryIntervalRef.current);
+        demRetryIntervalRef.current = null;
+      }
       zoneMarkersRef.current.forEach(m => m.remove());
       zoneMarkersRef.current = [];
       zoneBadgeMarkersRef.current = [];
