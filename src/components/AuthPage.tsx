@@ -26,6 +26,10 @@ export default function AuthPage() {
             { id: data.user.id, terms_accepted_at: new Date().toISOString() },
             { onConflict: 'id' }
           );
+          // Best-effort welcome email + CRM tag — never blocks or surfaces errors to the user
+          supabase.functions.invoke('send-welcome-email', {
+            body: { email, userId: data.user.id },
+          }).catch(err => console.error('[welcome-email] failed to invoke', err));
         }
       }
     } catch (err: unknown) {
