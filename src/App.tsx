@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { supabase } from './lib/supabase';
 import type { User } from '@supabase/supabase-js';
 import AuthPage from './components/AuthPage';
+import ResetPasswordPage from './components/ResetPasswordPage';
 import Layout from './components/Layout';
 import Dashboard from './components/Dashboard';
 import ReportDetail from './components/ReportDetail';
@@ -38,6 +39,10 @@ function consumePendingPlan(): { plan: PlanSlug; interval: 'monthly' | 'annual' 
     return { plan, interval: resolvedInterval };
   }
   return null;
+}
+
+function isResetPasswordRoute(): boolean {
+  return window.location.pathname === '/reset-password';
 }
 
 function getPublicReportId(): string | null {
@@ -302,6 +307,9 @@ export default function App() {
   const publicReportId = getPublicReportId();
   if (publicReportId) {
     return <PublicReportPage reportId={publicReportId} />;
+  }
+  if (isResetPasswordRoute()) {
+    return <ResetPasswordPage />;
   }
   return <AuthenticatedApp />;
 }

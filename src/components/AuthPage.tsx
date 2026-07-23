@@ -3,11 +3,12 @@ import { supabase } from '../lib/supabase';
 import { Mail, Lock, ArrowRight, AlertCircle } from 'lucide-react';
 
 export default function AuthPage() {
-  const [mode, setMode] = useState<'login' | 'signup'>('login');
+  const [mode, setMode] = useState<'login' | 'signup' | 'reset-request'>('login');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+  const [resetSent, setResetSent] = useState(false);
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -18,7 +19,7 @@ export default function AuthPage() {
       if (mode === 'login') {
         const { error } = await supabase.auth.signInWithPassword({ email, password });
         if (error) throw error;
-      } else {
+      } else if (mode === 'signup') {
         const { data, error } = await supabase.auth.signUp({ email, password });
         if (error) throw error;
         if (data.user) {
@@ -31,6 +32,12 @@ export default function AuthPage() {
             body: { email, userId: data.user.id },
           }).catch(err => console.error('[welcome-email] failed to invoke', err));
         }
+      } else if (mode === 'reset-request') {
+        const { error } = await supabase.auth.resetPasswordForEmail(email, {
+          redirectTo: `${window.location.origin}/reset-password`,
+        });
+        if (error) throw error;
+        setResetSent(true);
       }
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : 'An error occurred');
@@ -56,77 +63,116 @@ export default function AuthPage() {
 
         {/* Card */}
         <div className="card p-8">
-          {/* Tabs */}
-          <div className="flex bg-navy-900/60 rounded-lg p-1 mb-6">
-            {(['login', 'signup'] as const).map((tab) => (
+          {/* Tabs — hidden in reset-request mode */}
+          {mode !== 'reset-request' && (
+            <div className="flex bg-navy-900/60 rounded-lg p-1 mb-6">
+              {(['login', 'signup'] as const).map((tab) => (
+                <button
+                  key={tab}
+                  onClick={() => { setMode(tab); setError(''); setResetSent(false); }}
+                  className={`flex-1 py-2 text-sm font-medium rounded-md transition-all duration-200 ${
+                    mode === tab
+                      ? 'bg-primary-500 text-white shadow-sm'
+                      : 'text-white/50 hover:text-white/80'
+                  }`}
+                >
+                  {tab === 'login' ? 'Sign In' : 'Create Account'}
+                </button>
+              ))}
+            </div>
+          )}
+
+          {mode === 'reset-request' && resetSent ? (
+            <div className="space-y-4">
+              <div className="flex items-start gap-2 bg-primary-500/10 border border-primary-500/30 rounded-lg p-3">
+                <Mail className="w-4 h-4 text-primary-400 mt-0.5 flex-shrink-0" />
+                <p className="text-sm text-primary-400">Check your email for a reset link.</p>
+              </div>
               <button
-                key={tab}
-                onClick={() => { setMode(tab); setError(''); }}
-                className={`flex-1 py-2 text-sm font-medium rounded-md transition-all duration-200 ${
-                  mode === tab
-                    ? 'bg-primary-500 text-white shadow-sm'
-                    : 'text-white/50 hover:text-white/80'
-                }`}
+                onClick={() => { setMode('login'); setResetSent(false); setError(''); }}
+                className="text-sm text-white/50 hover:text-white/80 transition-colors"
               >
-                {tab === 'login' ? 'Sign In' : 'Create Account'}
+                Back to login
               </button>
-            ))}
-          </div>
-
-          <form onSubmit={handleSubmit} className="space-y-4">
-            <div>
-              <label className="block text-sm font-medium text-white/70 mb-1.5">Email</label>
-              <div className="relative">
-                <Mail className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-white/30" />
-                <input
-                  type="email"
-                  value={email}
-                  onChange={(e) => setEmail(e.target.value)}
-                  className="input pl-9"
-                  placeholder="you@example.com"
-                  required
-                />
-              </div>
             </div>
-
-            <div>
-              <label className="block text-sm font-medium text-white/70 mb-1.5">Password</label>
-              <div className="relative">
-                <Lock className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-white/30" />
-                <input
-                  type="password"
-                  value={password}
-                  onChange={(e) => setPassword(e.target.value)}
-                  className="input pl-9"
-                  placeholder="••••••••"
-                  required
-                  minLength={6}
-                />
+          ) : (
+            <form onSubmit={handleSubmit} className="space-y-4">
+              <div>
+                <label className="block text-sm font-medium text-white/70 mb-1.5">Email</label>
+                <div className="relative">
+                  <Mail className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-white/30" />
+                  <input
+                    type="email"
+                    value={email}
+                    onChange={(e) => setEmail(e.target.value)}
+                    className="input pl-9"
+                    placeholder="you@example.com"
+                    required
+                  />
+                </div>
               </div>
-            </div>
 
-            {error && (
-              <div className="flex items-start gap-2 bg-danger-500/10 border border-danger-500/30 rounded-lg p-3">
-                <AlertCircle className="w-4 h-4 text-danger-400 mt-0.5 flex-shrink-0" />
-                <p className="text-sm text-danger-400">{error}</p>
-              </div>
-            )}
-
-            <button
-              type="submit"
-              disabled={loading}
-              className="btn-primary w-full flex items-center justify-center gap-2 py-2.5 mt-2"
-            >
-              {loading ? (
-                <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-              ) : (
-                <>
-                  {mode === 'login' ? 'Sign In' : 'Create Account'}
-                  <ArrowRight className="w-4 h-4" />
-                </>
+              {mode !== 'reset-request' && (
+                <div>
+                  <label className="block text-sm font-medium text-white/70 mb-1.5">Password</label>
+                  <div className="relative">
+                    <Lock className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-white/30" />
+                    <input
+                      type="password"
+                      value={password}
+                      onChange={(e) => setPassword(e.target.value)}
+                      className="input pl-9"
+                      placeholder="••••••••"
+                      required
+                      minLength={6}
+                    />
+                  </div>
+                </div>
               )}
+
+              {error && (
+                <div className="flex items-start gap-2 bg-danger-500/10 border border-danger-500/30 rounded-lg p-3">
+                  <AlertCircle className="w-4 h-4 text-danger-400 mt-0.5 flex-shrink-0" />
+                  <p className="text-sm text-danger-400">{error}</p>
+                </div>
+              )}
+
+              <button
+                type="submit"
+                disabled={loading}
+                className="btn-primary w-full flex items-center justify-center gap-2 py-2.5 mt-2"
+              >
+                {loading ? (
+                  <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                ) : (
+                  <>
+                    {mode === 'login' ? 'Sign In' : mode === 'signup' ? 'Create Account' : 'Send reset link'}
+                    <ArrowRight className="w-4 h-4" />
+                  </>
+                )}
+              </button>
+            </form>
+          )}
+
+          {/* Forgot password link — login mode only */}
+          {mode === 'login' && (
+            <button
+              onClick={() => { setMode('reset-request'); setError(''); setResetSent(false); }}
+              className="block mx-auto mt-3 text-sm text-white/40 hover:text-white/70 transition-colors"
+            >
+              Forgot password?
             </button>
-          </form>
+          )}
+
+          {/* Back to login — reset-request mode (pre-send) */}
+          {mode === 'reset-request' && !resetSent && (
+            <button
+              onClick={() => { setMode('login'); setError(''); }}
+              className="block mx-auto mt-3 text-sm text-white/40 hover:text-white/70 transition-colors"
+            >
+              Back to login
+            </button>
+          )}
 
           {mode === 'signup' && (
             <p className="text-xs text-white/30 text-center mt-4">
